@@ -215,12 +215,22 @@ async def _grade_single_trace(trace: queries.Trace, case: dict) -> dict:
     return grades
 
 
-# In-flight experiment cancellation tokens
-_cancel_flags: dict[int, bool] = {}
+# In-flight experiment cancellation: experiment_id -> why. Once set, cases that
+# are still queued never start; cases already in flight finish and get graded.
+# The dict lives in this process, so a stop request only reaches experiments
+# started by this process (the API server's own background runs).
+CANCEL_STOP = "stop"                    # requested through request_stop()
+CANCEL_CIRCUIT_BREAK = "circuit_break"  # CIRCUIT_BREAKER_THRESHOLD consecutive errors
+_cancel_flags: dict[int, str] = {}
+
+# A run that ended early keeps its status when re-graded.
+PARTIAL_STATUSES = {"paused", "stopped"}
 
 
 def request_stop(experiment_id: int):
-    _cancel_flags[experiment_id] = True
+    # setdefault: a stop request after the circuit breaker tripped keeps the
+    # breaker as the recorded reason.
+    _cancel_flags.setdefault(experiment_id, CANCEL_STOP)
 
 
 async def run_experiment(
@@ -246,7 +256,7 @@ async def run_experiment(
 
     Updates DB traces and broadcasts progress via WebSocket.
     """
-    _cancel_flags[experiment_id] = False
+    _cancel_flags.pop(experiment_id, None)  # drop any stale request from before this run
     manager = get_manager()
     collect_sem = asyncio.Semaphore(concurrency)
 
@@ -257,6 +267,7 @@ async def run_experiment(
     # ── Shared state ──
     case_map: dict[str, dict] = {c["key"]: c for c in cases}
     consecutive_errors = 0
+    skipped = 0  # trials that never started because the run was stopped / circuit-broken
     graded_count = 0
     graded_scores: list[float] = []
     graded_passes: list[bool] = []
@@ -266,67 +277,76 @@ async def run_experiment(
 
     # ── Collect Worker ──
     async def collect_one(case: dict, trial_num: int):
-        nonlocal consecutive_errors
+        nonlocal consecutive_errors, skipped
 
-        if _cancel_flags.get(experiment_id):
-            return
+        # Everything that decides whether the next queued case may start — the
+        # cancel check, the error count, the circuit breaker — runs while this
+        # task holds a collect slot. All collect tasks are created up front, so
+        # a cancel check made before the semaphore runs before any stop request
+        # can arrive, and error accounting done after releasing the slot lets
+        # the queued cases through before the breaker trips.
+        async with collect_sem:
+            if _cancel_flags.get(experiment_id):
+                skipped += 1  # never started: no trace row, no case_start
+                return
 
-        trace_id = await queries.create_trace(
-            experiment_id, case["key"], trial_num, case["query"], case.get("type", "clear_en"),
-        )
-        manager.broadcast(experiment_id, {
-            "type": "case_start",
-            "case_key": case["key"],
-            "trial_num": trial_num,
-            "trace_id": trace_id,
-        })
+            trace_id = await queries.create_trace(
+                experiment_id, case["key"], trial_num, case["query"], case.get("type", "clear_en"),
+            )
+            manager.broadcast(experiment_id, {
+                "type": "case_start",
+                "case_key": case["key"],
+                "trial_num": trial_num,
+                "trace_id": trace_id,
+            })
 
-        try:
-            async with collect_sem:
+            try:
                 result = await collect_single_case(case, trial_num, model=model, system_prompt=system_prompt, ablation_flags=ablation_flags)
 
-            trace_data = _result_to_trace_data(result, case, trial_num)
-            await queries.update_trace(trace_id, **trace_data)
-            consecutive_errors = 0
+                trace_data = _result_to_trace_data(result, case, trial_num)
+                await queries.update_trace(trace_id, **trace_data)
+                consecutive_errors = 0
 
-            manager.broadcast(experiment_id, {
-                "type": "case_collected",
-                "case_key": case["key"],
-                "trial_num": trial_num,
-                "trace_id": trace_id,
-                "duration_s": result.duration_s,
-            })
-
-            # Enqueue for grading immediately
-            await grade_queue.put(trace_id)
-
-        except Exception as e:
-            await queries.update_trace(trace_id, **{
-                "status": "error",
-                "error_events": [{"type": "error", "message": str(e)[:500]}],
-                "final_score": 0,
-                "final_pass": 0,
-            })
-            consecutive_errors += 1
-
-            manager.broadcast(experiment_id, {
-                "type": "case_error",
-                "case_key": case["key"],
-                "trial_num": trial_num,
-                "trace_id": trace_id,
-                "error": str(e)[:200],
-            })
-
-            # Circuit breaker
-            if consecutive_errors >= CIRCUIT_BREAKER_THRESHOLD:
-                reason = f"Circuit breaker: {consecutive_errors} consecutive errors"
-                await queries.update_experiment_status(experiment_id, "paused")
                 manager.broadcast(experiment_id, {
-                    "type": "circuit_break",
-                    "reason": reason,
-                    "consecutive_errors": consecutive_errors,
+                    "type": "case_collected",
+                    "case_key": case["key"],
+                    "trial_num": trial_num,
+                    "trace_id": trace_id,
+                    "duration_s": result.duration_s,
                 })
-                _cancel_flags[experiment_id] = True
+
+                # Enqueue for grading immediately
+                await grade_queue.put(trace_id)
+
+            except Exception as e:
+                await queries.update_trace(trace_id, **{
+                    "status": "error",
+                    "error_events": [{"type": "error", "message": str(e)[:500]}],
+                    "final_score": 0,
+                    "final_pass": 0,
+                })
+                consecutive_errors += 1
+
+                manager.broadcast(experiment_id, {
+                    "type": "case_error",
+                    "case_key": case["key"],
+                    "trial_num": trial_num,
+                    "trace_id": trace_id,
+                    "error": str(e)[:200],
+                })
+
+                # Circuit breaker — trips once; errors from cases that were already
+                # in flight when it tripped don't announce it again.
+                if (consecutive_errors >= CIRCUIT_BREAKER_THRESHOLD
+                        and _cancel_flags.get(experiment_id) != CANCEL_CIRCUIT_BREAK):
+                    _cancel_flags[experiment_id] = CANCEL_CIRCUIT_BREAK
+                    reason = f"Circuit breaker: {consecutive_errors} consecutive errors"
+                    await queries.update_experiment_status(experiment_id, "paused")
+                    manager.broadcast(experiment_id, {
+                        "type": "circuit_break",
+                        "reason": reason,
+                        "consecutive_errors": consecutive_errors,
+                    })
 
     # ── Grade Worker ──
     async def grade_worker():
@@ -412,9 +432,18 @@ async def run_experiment(
     # ── Phase 3: Final Aggregate ──
     summary = await queries.compute_experiment_summary(experiment_id)
 
-    status = "complete"
-    if _cancel_flags.get(experiment_id) and consecutive_errors >= CIRCUIT_BREAKER_THRESHOLD:
+    cancel_reason = _cancel_flags.get(experiment_id)
+    if cancel_reason == CANCEL_CIRCUIT_BREAK:
         status = "paused"
+    elif cancel_reason == CANCEL_STOP and skipped > 0:
+        status = "stopped"
+    else:
+        # Includes a stop request that arrived after every case had already started.
+        status = "complete"
+    if skipped:
+        logger.info(
+            f"Experiment {experiment_id} {status}: {skipped}/{total} trials never started ({cancel_reason})"
+        )
 
     await queries.update_experiment_status(
         experiment_id, status,
@@ -423,6 +452,8 @@ async def run_experiment(
     )
     manager.broadcast(experiment_id, {
         "type": "experiment_done",
+        "status": status,
+        "skipped": skipped,
         "summary": summary.model_dump(),
     })
     _cancel_flags.pop(experiment_id, None)
@@ -456,10 +487,12 @@ async def regrade_experiment(experiment_id: int) -> int:
         except Exception:
             continue
 
-    # Recompute summary
+    # Recompute summary. Re-grading the traces that exist does not turn a run
+    # that ended early into a complete one.
+    status = experiment.status if experiment.status in PARTIAL_STATUSES else "complete"
     summary = await queries.compute_experiment_summary(experiment_id)
     await queries.update_experiment_status(
-        experiment_id, "complete",
+        experiment_id, status,
         summary=summary.model_dump(),
         finished_at=time.time(),
     )
