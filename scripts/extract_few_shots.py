@@ -5,8 +5,8 @@ Reads human-annotated traces from the train split, selects the best examples
 (1 clear PASS + 1 clear FAIL per grader), and writes to calibration/few_shots/.
 
 Usage:
-    python eval/scripts/extract_few_shots.py
-    python eval/scripts/extract_few_shots.py --db eval/backend/eval.db
+    python scripts/extract_few_shots.py
+    python scripts/extract_few_shots.py --db backend/eval.db
 """
 
 import argparse
@@ -14,11 +14,12 @@ import json
 import sqlite3
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-CALIBRATION_DIR = _REPO_ROOT / "eval" / "calibration"
+_REPO_ROOT = Path(__file__).resolve().parent.parent  # repo root
+# Must match graders/llm_graders.py:_CALIBRATION_DIR — the judge reads few-shots from here.
+CALIBRATION_DIR = _REPO_ROOT / "calibration"
 FEW_SHOTS_DIR = CALIBRATION_DIR / "few_shots"
 SPLITS_FILE = CALIBRATION_DIR / "splits.json"
-DB_PATH = _REPO_ROOT / "eval" / "backend" / "eval.db"
+DB_PATH = _REPO_ROOT / "backend" / "eval.db"
 
 # LLM graders that need few-shot examples
 LLM_GRADERS = ["rubric_compliance", "groundedness", "actionability", "trap_detection"]

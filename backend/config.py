@@ -20,10 +20,23 @@ EVAL_API_KEY = os.getenv("EVAL_API_KEY", "")
 # Kept here for reference; Agent SDK picks up ANTHROPIC_API_KEY from os.environ.
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
+# Optional Anthropic-compatible gateway (e.g. OpenRouter). The Agent SDK and the
+# anthropic client read ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN from the environment;
+# non-Anthropic model ids such as "openai/gpt-5.4" only resolve through such a gateway.
+ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "")
+
 # L2 grading model — MUST be stronger than the product orchestrator (claude-sonnet-4-6).
 # Judge needs superior reasoning to catch errors the weaker model makes.
-# Uses OpenRouter (ANTHROPIC_BASE_URL) to access cross-vendor models.
+# Default assumes an OpenRouter-style gateway (see ANTHROPIC_BASE_URL above);
+# with a plain Anthropic key, set GRADING_MODEL to a Claude model.
 GRADING_MODEL = os.getenv("GRADING_MODEL", "openai/gpt-5.4")
+
+# Fallback judge model when GRADING_MODEL fails (Agent SDK fallback_model).
+GRADING_FALLBACK_MODEL = os.getenv("GRADING_FALLBACK_MODEL", "minimax/minimax-m2.7-highspeed")
+
+# Model that answers the product agent's clarification questions on the user's behalf
+# (runner/executor.py). Only has to pick an option, so a cheap model is fine.
+USER_SIMULATOR_MODEL = os.getenv("USER_SIMULATOR_MODEL", "minimax/minimax-m2.7")
 
 # Scoring thresholds
 # Calibrated 2026-03-28: human=Pass at 59.2, human=Fail at 51.6 → threshold 60

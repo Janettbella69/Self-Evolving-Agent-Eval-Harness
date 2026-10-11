@@ -9,6 +9,7 @@ import logging
 import time
 
 from runner.collector import collect_sse, CollectedResult
+from config import USER_SIMULATOR_MODEL
 from graders.pipeline import grade_trace as grade_trace_pipeline
 from storage import queries
 from runner.progress import get_manager
@@ -62,7 +63,7 @@ async def _simulate_user_answer(original_query: str, clarification: dict) -> str
         options_text = "\n".join(f"- {o}" for o in options) if options else "(no predefined options)"
 
         resp = await client.messages.create(
-            model="minimax/minimax-m2.7",
+            model=USER_SIMULATOR_MODEL,
             max_tokens=100,
             system=(
                 "You are simulating a real shopper answering a clarification question. "

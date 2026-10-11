@@ -114,6 +114,7 @@ def _get_eval_hooks() -> dict:
     }
 from config import (
     GRADING_MODEL,
+    GRADING_FALLBACK_MODEL,
     JUDGE_PRESET,
     JUDGE_MAX_TURNS_PRESET,
     JUDGE_MAX_TURNS_BASIC,
@@ -246,8 +247,8 @@ def _build_options(
         allowed_tools = base_tools
         max_turns = 10 if is_l2 else JUDGE_MAX_TURNS_BASIC
 
-    # Fallback model: if GRADING_MODEL fails, try a cheaper alternative
-    fallback = os.getenv("GRADING_FALLBACK_MODEL", "minimax/minimax-m2.7-highspeed")
+    # Fallback model: if GRADING_MODEL fails, try a cheaper alternative (config.GRADING_FALLBACK_MODEL)
+    fallback = GRADING_FALLBACK_MODEL
 
     return ClaudeAgentOptions(
         system_prompt=system_prompt,

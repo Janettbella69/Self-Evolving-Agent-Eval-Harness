@@ -366,7 +366,7 @@ def main():
     traces = load_labeled_traces(db_path, args.experiment_id)
     if not traces:
         print(f"No human-labeled traces found.")
-        print(f"Label traces via: python eval/scripts/annotate_batch.py --experiment-id N")
+        print(f"Label traces via: python scripts/annotate_batch.py --experiment-id N")
         sys.exit(0)
 
     print(f"Found {len(traces)} human-labeled traces.")

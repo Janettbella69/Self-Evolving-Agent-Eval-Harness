@@ -11,11 +11,11 @@ Phase 2: Annotation sampling
   - Outputs annotation queue as JSON for batch review
 
 Usage:
-    python eval/scripts/regrade_and_annotate.py regrade --experiment-id 66
-    python eval/scripts/regrade_and_annotate.py regrade --all
-    python eval/scripts/regrade_and_annotate.py sample --n 50 [--experiment-id 66]
-    python eval/scripts/regrade_and_annotate.py annotate --trace-id 285 --verdict pass
-    python eval/scripts/regrade_and_annotate.py annotate --batch annotations.json
+    python scripts/regrade_and_annotate.py regrade --experiment-id 66
+    python scripts/regrade_and_annotate.py regrade --all
+    python scripts/regrade_and_annotate.py sample --n 50 [--experiment-id 66]
+    python scripts/regrade_and_annotate.py annotate --trace-id 285 --verdict pass
+    python scripts/regrade_and_annotate.py annotate --batch annotations.json
 """
 
 import argparse

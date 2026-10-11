@@ -36,7 +36,7 @@ trace 采集 → 错误分析(开放编码→taxonomy) → 人工标注(gold) �
 └─────────────────────────────┘        └────────────┬─────────────┘
                                                     │
                                        ┌────────────▼─────────────┐
-                                       │  标注前端 (frontend-v2/)  │
+                                       │  标注前端 (frontend/)     │
                                        │  Trace 查看 / Pass-Fail   │
                                        │  标注 / 开放编码 / 实验对比 │
                                        └──────────────────────────┘
@@ -114,7 +114,7 @@ python cli.py regression --latest --threshold 5   # 最近两次对比，掉分�
 python scripts/sample_for_annotation.py --experiment-id 1 --count 50   # 采样（--seed 可复现）
 ```
 
-然后在 UI 的 TracePage 逐条判 Pass/Fail、打开放编码（open codes）。判据写在 `ANNOTATION_GUIDE.md`——换领域先重写它。标注落库到 `human_pass` / `human_scores` 字段。
+然后在 `frontend/` 的 Trace 页（`/traces/:id`）逐条判 Pass/Fail、打开放编码（open codes）。判据写在 `ANNOTATION_GUIDE.md`——换领域先重写它。标注落库到 `human_pass` / `human_scores` 字段。
 
 ### 4. 校准 judge（拿到可信的 TPR/TNR）
 
@@ -142,7 +142,7 @@ EVAL_DATASET="My Agent Baseline V1" scripts/run_eval.sh regression --threshold 5
 python scripts/export_langfuse.py --days 30 --limit 200 --tag my-agent --grade
 ```
 
-需要 `.env` 中的 LangFuse 密钥；`--grade` 表示导入后立即打分。
+需要 `.env` 中的 LangFuse 密钥；`--grade` 表示导入后立即打分。脚本用的是 langfuse 2.x 的 `fetch_traces` 接口，`requirements.txt` 已锁 `<3`。
 
 ### 环境变量参考
 
@@ -151,8 +151,13 @@ python scripts/export_langfuse.py --days 30 --limit 200 --tag my-agent --grade
 | `PRODUCT_API_URL` | 被测 Agent 的 API 地址 | `http://localhost:8001` |
 | `EVAL_API_KEY` | 与被测系统的共享密钥 | 空 |
 | `ANTHROPIC_API_KEY` | L2 judge 调用所需 | 空 |
-| `GRADING_MODEL` | judge 模型（必须强于被测模型） | 见 `backend/config.py` |
+| `GRADING_MODEL` | judge 模型（必须强于被测模型） | `openai/gpt-5.4`（需经网关） |
+| `ANTHROPIC_BASE_URL` | Anthropic 兼容网关（如 OpenRouter）。默认 judge 模型只能经网关访问；用纯 Anthropic key 时把 `GRADING_MODEL` 改成 Claude 模型 | 空 |
+| `ANTHROPIC_AUTH_TOKEN` | 网关要求时替代 `ANTHROPIC_API_KEY` | 空 |
+| `GRADING_FALLBACK_MODEL` | judge 主模型失败时的备用模型 | `minimax/minimax-m2.7-highspeed` |
+| `USER_SIMULATOR_MODEL` | 替用户回答被测 Agent 追问的模型 | `minimax/minimax-m2.7` |
 | `JUDGE_ENABLED` | 是否启用 L2 judge | 关 |
+| `JUDGE_PRESET` | judge 是否使用 Claude Code 全工具预设（更慢，可联网核实） | 关 |
 | `PASS_THRESHOLD` | 通过阈值（应由校准得出，勿拍脑袋） | `60` |
 | `PRODUCT_CODE_PATH` | 被测 Agent 源码路径，preset judge 深检用（可选） | 空 |
 | `LANGFUSE_SECRET_KEY` / `LANGFUSE_PUBLIC_KEY` | 生产 trace 导入 | 空 |
@@ -171,7 +176,7 @@ python scripts/export_langfuse.py --days 30 --limit 200 --tag my-agent --grade
 
 ## Quickstart
 
-前置要求：**Python 3.10+**（3.11 实测验证）、**Node 18+**。
+前置要求：**Python 3.10+**（3.11 实测验证）、**Node 18+**。L2 judge 通过 Claude Agent SDK 启动 Claude Code 子进程，`requirements.txt` 锁定的 SDK 版本自带 CLI，不用单独安装；只做 import / UI 浏览 / 人工标注则连 judge 也不需要。
 
 **1. 启动评测后端（端口 8100）**
 
@@ -193,9 +198,11 @@ python cli.py list
 **3. 启动标注/实验 UI**
 
 ```bash
-cd frontend-v2
+cd frontend
 npm install && npm run dev                  # http://localhost:5200，/api 与 /ws 已代理到 8100
 ```
+
+`frontend-v2/` 是新版 UI 的静态原型，没有接任何接口，不能用来标注（见其 README）。
 
 **4. 跑一个实验（这一步需要被测 Agent 在线）**
 
@@ -211,8 +218,8 @@ python cli.py regression --latest --threshold 5
 
 ```
 backend/          # FastAPI 评测后端：api/ graders/ runner/ storage/ agent/
-frontend/         # 标注与实验 UI（v1，含失效漏斗、分数趋势、实验对比）
-frontend-v2/      # 标注与实验 UI（v2，datasets/evaluators/experiments/observation）
+frontend/         # 标注与实验 UI（可用：Pass/Fail 标注、开放编码、失效漏斗、分数趋势、实验对比）
+frontend-v2/      # 新版 UI 静态原型（未接后端，见其 README）
 calibration/      # Judge 校准 few-shots（groundedness / actionability / rubric / trap）
 datasets/         # 数据集（AZORA 案例：deepshop_v1 / legacy_v1）
 scripts/          # 采样、标注、校准、回归、LangFuse 导出等工作流脚本

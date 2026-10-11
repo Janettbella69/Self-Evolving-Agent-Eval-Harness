@@ -1,7 +1,7 @@
 """Import ShoppingComp dataset into eval system, split by product category.
 
 Creates one dataset per category, combining EN+ZH and normal+trap cases.
-Run from eval/backend/: python3 ../scripts/import_by_category.py
+Run from the repo root: python3 scripts/import_by_category.py
 """
 
 import asyncio
@@ -15,9 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 from storage.database import init_db
 from storage import queries
 
-# Resolve data dir relative to this script's location (eval/scripts/)
-# datasets/ShoppingComp is at repo root
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+# Resolve data dir relative to this script's location (scripts/ under repo root)
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = _REPO_ROOT / "datasets" / "ShoppingComp"
 
 FILES = [

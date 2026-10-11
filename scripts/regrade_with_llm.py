@@ -5,7 +5,7 @@ Only targets traces with actual guide text (>500 chars).
 Uses JUDGE_ENABLED=true from .env — does NOT override it.
 
 Usage:
-    python eval/scripts/regrade_with_llm.py [--limit N] [--dry-run]
+    python scripts/regrade_with_llm.py [--limit N] [--dry-run]
 """
 
 import asyncio
@@ -16,8 +16,8 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=True)
-load_dotenv(Path(__file__).resolve().parent.parent.parent / "backend" / ".env", override=True)
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)  # optional repo-root .env
+load_dotenv(Path(__file__).resolve().parent.parent / "backend" / ".env", override=True)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 os.environ.pop("CLAUDECODE", None)

@@ -20,8 +20,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=True)
-load_dotenv(Path(__file__).resolve().parent.parent.parent / "backend" / ".env", override=True)
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)  # optional repo-root .env
+load_dotenv(Path(__file__).resolve().parent.parent / "backend" / ".env", override=True)
 
 # Prevent nested Agent SDK session conflict (critical when run from Claude Code)
 os.environ.pop("CLAUDECODE", None)
