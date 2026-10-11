@@ -5,9 +5,9 @@ Presents trace summaries and collects PASS/FAIL judgments.
 Writes to both SQLite DB and calibration/annotations.jsonl.
 
 Usage:
-    python eval/scripts/annotate_batch.py --experiment-id 28
-    python eval/scripts/annotate_batch.py --experiment-id 28 --limit 10
-    python eval/scripts/annotate_batch.py --experiment-id 28 --unannotated-only
+    python scripts/annotate_batch.py --experiment-id 28
+    python scripts/annotate_batch.py --experiment-id 28 --limit 10
+    python scripts/annotate_batch.py --experiment-id 28 --unannotated-only
 """
 
 import argparse
@@ -17,9 +17,9 @@ import sys
 import time
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-ANNOTATIONS_FILE = _REPO_ROOT / "eval" / "calibration" / "annotations.jsonl"
-DB_PATH = _REPO_ROOT / "eval" / "backend" / "eval.db"
+_REPO_ROOT = Path(__file__).resolve().parent.parent  # repo root (scripts/ lives directly under it)
+ANNOTATIONS_FILE = _REPO_ROOT / "calibration" / "annotations.jsonl"
+DB_PATH = _REPO_ROOT / "backend" / "eval.db"
 
 
 def load_traces(db_path: str, experiment_id: int, unannotated_only: bool = False, limit: int = 0) -> list[dict]:

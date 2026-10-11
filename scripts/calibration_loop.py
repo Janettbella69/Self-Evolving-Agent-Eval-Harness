@@ -9,11 +9,11 @@ Implements the Hamel Husain validate-evaluator workflow:
 5. Log iteration results
 
 Usage:
-    python eval/scripts/calibration_loop.py --create-splits          # First: create splits
-    python eval/scripts/calibration_loop.py --run-dev                # Regrade dev + report
-    python eval/scripts/calibration_loop.py --run-test               # Final test evaluation
-    python eval/scripts/calibration_loop.py --show-errors dev        # Show FP/FN on dev
-    python eval/scripts/calibration_loop.py --history                # Show iteration history
+    python scripts/calibration_loop.py --create-splits          # First: create splits
+    python scripts/calibration_loop.py --run-dev                # Regrade dev + report
+    python scripts/calibration_loop.py --run-test               # Final test evaluation
+    python scripts/calibration_loop.py --show-errors dev        # Show FP/FN on dev
+    python scripts/calibration_loop.py --history                # Show iteration history
 """
 
 import argparse
@@ -26,14 +26,14 @@ from pathlib import Path
 
 import numpy as np
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-CALIBRATION_DIR = _REPO_ROOT / "eval" / "calibration"
+_REPO_ROOT = Path(__file__).resolve().parent.parent  # repo root
+CALIBRATION_DIR = _REPO_ROOT / "calibration"
 SPLITS_FILE = CALIBRATION_DIR / "splits.json"
 LOG_FILE = CALIBRATION_DIR / "calibration_log.jsonl"
-DB_PATH = _REPO_ROOT / "eval" / "backend" / "eval.db"
+DB_PATH = _REPO_ROOT / "backend" / "eval.db"
 
 # Add eval backend to path for regrade
-sys.path.insert(0, str(_REPO_ROOT / "eval" / "backend"))
+sys.path.insert(0, str(_REPO_ROOT / "backend"))
 
 
 def load_annotated_traces(db_path: str) -> list[dict]:

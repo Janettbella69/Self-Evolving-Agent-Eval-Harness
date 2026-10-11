@@ -36,7 +36,7 @@ async def get_dataset(dataset_id: int):
 async def import_dataset(body: DatasetIn | None = None, name: str | None = None):
     """Import a dataset from JSON file or request body.
 
-    If `name` is provided (query param), loads from eval/datasets/{name}.json.
+    If `name` is provided (query param), loads from datasets/{name}.json.
     If body is provided, uses inline cases.
     """
     if name:

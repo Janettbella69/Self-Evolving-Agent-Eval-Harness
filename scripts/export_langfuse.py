@@ -10,9 +10,9 @@ Usage:
     export LANGFUSE_PUBLIC_KEY=pk-lf-...
 
     # Run export
-    python3 eval/scripts/export_langfuse.py
-    python3 eval/scripts/export_langfuse.py --limit 100 --days 30
-    python3 eval/scripts/export_langfuse.py --tag shopping-research --grade
+    python3 scripts/export_langfuse.py
+    python3 scripts/export_langfuse.py --limit 100 --days 30
+    python3 scripts/export_langfuse.py --tag shopping-research --grade
 
 After export, you can safely uninstall langfuse:
     pip uninstall langfuse langsmith opentelemetry-api
@@ -43,7 +43,7 @@ def get_langfuse_client():
         print("")
         print("  export LANGFUSE_SECRET_KEY=sk-lf-...")
         print("  export LANGFUSE_PUBLIC_KEY=pk-lf-...")
-        print("  python3 eval/scripts/export_langfuse.py")
+        print("  python3 scripts/export_langfuse.py")
         sys.exit(1)
 
     try:
