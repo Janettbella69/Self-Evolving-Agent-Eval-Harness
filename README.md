@@ -245,19 +245,17 @@ ANNOTATION_GUIDE.md  # 标注指南（AZORA 案例实例，可作为你的领域
 
 按影响排序，修复中：
 
-1. 并发打分会串分：`agent/tools.py` 用模块级字典收集 judge 结果，而执行器默认开两个打分 worker，两条 trace 同时过 judge 时结果可能互相覆盖。
-2. 实验的 stop 和熔断只改状态不拦任务：取消标记在排队前检查，排队中的 case 仍会跑完。
-3. 实验级 `judge_enabled` / `grading_model` 只记录不生效，实际以全局 `JUDGE_ENABLED` / `GRADING_MODEL` 为准。
-4. `regression --latest` 取全库最近两个完成的实验比平均分，不按数据集、case 子集或 judge 版本配对。
-5. `JUDGE_PROMPT_VERSION` 未覆盖 few-shot 文件、数据库中的 prompt 和 judge 模型名。
-6. `extract_few_shots.py` 优先选 judge 与人一致的样本，并沿用 judge 自己的 reasoning，对纠正分歧帮助有限。
-7. 没有自动化测试。
+1. 实验级 `judge_enabled` / `grading_model` 只记录不生效，实际以全局 `JUDGE_ENABLED` / `GRADING_MODEL` 为准。
+2. `regression --latest` 取全库最近两个完成的实验比平均分，不按数据集、case 子集或 judge 版本配对。
+3. `JUDGE_PROMPT_VERSION` 未覆盖 few-shot 文件、数据库中的 prompt 和 judge 模型名。
+4. `extract_few_shots.py` 优先选 judge 与人一致的样本，并沿用 judge 自己的 reasoning，对纠正分歧帮助有限。
+5. 自动化测试只覆盖 judge 打分工具的并发隔离和实验的 stop / 熔断，打分逻辑还没有测试。
 
 ## 路线图：自进化的评测系统
 
 目标是让「尺子」「数据集」「阈值」三样东西随标注和线上数据自动演进，人只在关键门上把关：
 
-- **尺子自进化**：标注累积到阈值自动跑验证；TPR/TNR 不达标时从 FP/FN 样本生成 few-shot 候选和 prompt 修订提案，在 dev 集重打分，达标后才激活为新版本（`judge_prompts` 表已有版本号和激活位），test 集只在封板时跑一次。前提是先修已知问题 5，否则无法归因。
+- **尺子自进化**：标注累积到阈值自动跑验证；TPR/TNR 不达标时从 FP/FN 样本生成 few-shot 候选和 prompt 修订提案，在 dev 集重打分，达标后才激活为新版本（`judge_prompts` 表已有版本号和激活位），test 集只在封板时跑一次。前提是先修已知问题 3，否则无法归因。
 - **数据集自进化**：线上失败 trace 自动转 case（`/traces/{id}/to_case` 已有），全员通过的 case 按饱和度检测退役（`/datasets/{id}/saturation` 已有），open codes 定期聚类产出新的失效分类。
 - **阈值自进化**：`PASS_THRESHOLD` 从标注分布计算，并按 judge 开关和权重配置分别校准。
 - **护栏**：激活新 prompt、退役 case 都保留人工批准；每条 trace 记录完整的尺子版本（prompt + few-shot + 模型）。
