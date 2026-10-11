@@ -26,7 +26,7 @@ from claude_agent_sdk import (
 
 logger = logging.getLogger(__name__)
 
-from agent.tools import create_eval_tools_server, init_scores, get_scores
+from agent.tools import create_eval_tools_server
 
 
 # ── Eval Agent Hooks (Harness Engineering) ────────────────────────────
@@ -36,14 +36,17 @@ from agent.tools import create_eval_tools_server, init_scores, get_scores
 # 2. PreToolUse(score_grader): validate verdict format before accepting
 # 3. PostToolUseFailure: log and guide agent to retry
 
-async def _on_eval_stop(input_data: dict, tool_use_id, context) -> dict:
+def _make_eval_stop_hook(scores: dict):
     """Stop hook: detect when agent finishes without scoring.
 
     If no score_grader call was made, inject a system message forcing
     the agent to make a decision. This is the #1 eval agent failure mode.
+    Bound to this run's score store so concurrent runs don't see each other.
     """
-    scores = get_scores()
-    if not scores:
+
+    async def _on_eval_stop(input_data: dict, tool_use_id, context) -> dict:
+        if scores:
+            return {}
         logger.warning("Eval agent Stop hook: no score recorded — injecting reminder")
         return {
             "systemMessage": (
@@ -54,7 +57,8 @@ async def _on_eval_stop(input_data: dict, tool_use_id, context) -> dict:
             ),
             "stopReason": "tool_use",  # Force agent to continue
         }
-    return {}
+
+    return _on_eval_stop
 
 
 async def _on_eval_pre_score(input_data: dict, tool_use_id, context) -> dict:
@@ -95,11 +99,11 @@ async def _on_eval_tool_failure(input_data: dict, tool_use_id, context) -> dict:
     }
 
 
-def _get_eval_hooks() -> dict:
-    """Build hooks config for the eval agent."""
+def _get_eval_hooks(scores: dict) -> dict:
+    """Build hooks config for one eval agent run."""
     return {
         "Stop": [
-            HookMatcher(hooks=[_on_eval_stop]),
+            HookMatcher(hooks=[_make_eval_stop_hook(scores)]),
         ],
         "PreToolUse": [
             HookMatcher(
@@ -218,6 +222,7 @@ _PRESET_EXTRA_TOOLS = [
 def _build_options(
     prompt_text: str,
     tools_server,
+    scores: dict,
     is_l2: bool = False,
 ) -> ClaudeAgentOptions:
     """Build ClaudeAgentOptions for either preset or basic mode.
@@ -259,7 +264,7 @@ def _build_options(
         allowed_tools=allowed_tools,
         mcp_servers={"eval-tools": tools_server},
         thinking=ThinkingConfigAdaptive(type="adaptive"),
-        hooks=_get_eval_hooks(),
+        hooks=_get_eval_hooks(scores),
     )
 
 
@@ -364,14 +369,14 @@ async def run_eval_agent(
     Returns:
         {"dimensions": {"name": "PASS"|"FAIL"|"UNKNOWN"}, "l2_score": float | None}
     """
-    init_scores()
+    scores: dict = {}  # per-run score store (see agent/tools.py)
 
     prompt_text = EVAL_AGENT_PROMPT.format(
         dimensions_block=_build_dimensions_block(),
     )
 
-    tools_server = create_eval_tools_server()
-    options = _build_options(prompt_text, tools_server, is_l2=True)
+    tools_server = create_eval_tools_server(scores)
+    options = _build_options(prompt_text, tools_server, scores, is_l2=True)
 
     message = _build_eval_message(
         query=query,
@@ -395,7 +400,7 @@ async def run_eval_agent(
             os.environ["CLAUDECODE"] = env_backup
 
     # Collect scores from tool calls
-    raw_scores = get_scores()
+    raw_scores = scores
 
     dimensions = {}
     for dim in L2_DIMENSIONS:
@@ -433,13 +438,13 @@ async def run_eval_grader(
     Returns:
         {"score": float, "result": str, "reasoning": str, ...} or None on failure.
     """
-    init_scores()
+    scores: dict = {}  # per-run score store (see agent/tools.py)
 
     # Prevent nested Claude Code session blocking Agent SDK
     env_backup = os.environ.pop("CLAUDECODE", None)
 
-    tools_server = create_eval_tools_server()
-    options = _build_options(system_prompt, tools_server, is_l2=False)
+    tools_server = create_eval_tools_server(scores)
+    options = _build_options(system_prompt, tools_server, scores, is_l2=False)
 
     num_turns = 0
     try:
@@ -464,7 +469,7 @@ async def run_eval_grader(
             os.environ["CLAUDECODE"] = env_backup
 
     # Case-insensitive lookup — LLM may send "Groundedness" instead of "groundedness"
-    raw_scores = get_scores()
+    raw_scores = scores
     grader_data = raw_scores.get(grader_name)
     if not grader_data:
         # Fallback: case-insensitive search
