@@ -106,6 +106,8 @@ _MIGRATIONS = [
     "ALTER TABLE datasets ADD COLUMN version INTEGER DEFAULT 1",
     # Experiment → dataset version snapshot (which version was tested)
     "ALTER TABLE experiments ADD COLUMN dataset_version INTEGER DEFAULT 0",
+    # Binary checks behind final_pass ({"gate.has_guide": true, "groundedness": false, ...})
+    "ALTER TABLE traces ADD COLUMN checks TEXT DEFAULT '{}'",
     # Grader validation history (TPR/TNR per judge prompt version)
     """CREATE TABLE IF NOT EXISTS grader_validations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

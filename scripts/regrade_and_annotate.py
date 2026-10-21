@@ -11,11 +11,11 @@ Phase 2: Annotation sampling
   - Outputs annotation queue as JSON for batch review
 
 Usage:
-    python eval/scripts/regrade_and_annotate.py regrade --experiment-id 66
-    python eval/scripts/regrade_and_annotate.py regrade --all
-    python eval/scripts/regrade_and_annotate.py sample --n 50 [--experiment-id 66]
-    python eval/scripts/regrade_and_annotate.py annotate --trace-id 285 --verdict pass
-    python eval/scripts/regrade_and_annotate.py annotate --batch annotations.json
+    python scripts/regrade_and_annotate.py regrade --experiment-id 66
+    python scripts/regrade_and_annotate.py regrade --all
+    python scripts/regrade_and_annotate.py sample --n 50 [--experiment-id 66]
+    python scripts/regrade_and_annotate.py annotate --trace-id 285 --verdict pass
+    python scripts/regrade_and_annotate.py annotate --batch annotations.json
 """
 
 import argparse
@@ -123,6 +123,7 @@ async def regrade_code_only(experiment_id: int | None = None, limit: int = 0):
                 """UPDATE traces SET
                     status='graded',
                     final_score=?, final_pass=?,
+                    checks=?,
                     composite_scores=?,
                     failure_funnel=?,
                     error_types=?,
@@ -132,6 +133,7 @@ async def regrade_code_only(experiment_id: int | None = None, limit: int = 0):
                 (
                     grades.get("final_score", 0),
                     int(grades.get("final_pass", False)),
+                    json.dumps(grades.get("checks", {})),
                     json.dumps(grades.get("composite_scores", {})),
                     json.dumps(grades.get("failure_funnel", {})),
                     json.dumps(grades.get("error_types", [])),

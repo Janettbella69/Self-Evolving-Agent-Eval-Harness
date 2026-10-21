@@ -90,6 +90,7 @@ class Trace(BaseModel):
     l2_scores: dict | None = None
     final_score: float = 0
     final_pass: bool = False
+    checks: dict = {}               # binary checks behind final_pass, {name: passed}
     composite_scores: dict = {}
     failure_funnel: dict = {}
     error_types: list[str] = []
@@ -130,6 +131,8 @@ class ExperimentSummary(BaseModel):
     consistency_rate: float = 0    # consistency@k (score std dev)
     failure_funnel_dist: dict = {}  # {understand: 3, search: 5, ...}
     grader_averages: dict = {}      # {rubric_coverage: 72.3, ...}
+    check_pass_rates: dict = {}     # {"groundedness": {"passed": 7, "total": 10, "rate": 0.7}, ...}
+    pass_rule: str = ""             # PASS_RULE when summarized: pass_all | composite
     pass_at_k: dict = {}            # {"pass@1": 0.75, "pass@3": 0.92, ...}
     pass_pow_k: dict = {}           # {"pass^1": 0.75, "pass^3": 0.42, ...}
     suite_type: str = "capability"  # capability | regression (from dataset)

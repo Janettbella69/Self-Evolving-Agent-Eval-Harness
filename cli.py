@@ -2,13 +2,13 @@
 """Eval platform CLI.
 
 Usage:
-    python eval/cli.py import --dataset legacy_v1
-    python eval/cli.py import-shoppingcomp --file datasets/ShoppingComp/X.jsonl --name "Name"
-    python eval/cli.py run --dataset "Dataset Name" [--cases key1,key2] [--tag v1.0] [--trials 1] [--concurrency 1]
-    python eval/cli.py list
-    python eval/cli.py summary --experiment-id 1
-    python eval/cli.py regression --latest [--threshold 5]
-    python eval/cli.py regrade --experiment-id 1
+    python cli.py import --dataset legacy_v1
+    python cli.py import-shoppingcomp --file datasets/ShoppingComp/X.jsonl --name "Name"
+    python cli.py run --dataset "Dataset Name" [--cases key1,key2] [--tag v1.0] [--trials 1] [--concurrency 1]
+    python cli.py list
+    python cli.py summary --experiment-id 1
+    python cli.py regression --latest [--threshold 5]
+    python cli.py regrade --experiment-id 1
 """
 
 import argparse
@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-# Add eval/backend to path for direct DB access
+# Add backend/ to path for direct DB access
 sys.path.insert(0, str(Path(__file__).parent / "backend"))
 
 
@@ -51,9 +51,14 @@ async def cmd_import(args):
         await queries.upsert_case(
             dataset_id, case["key"], case["query"],
             case.get("type", "clear_en"), case.get("constraints", {}),
+            golden_data=case.get("golden_data") or {},
+            reference_output=case.get("reference_output"),
         )
 
-    print(f"Imported {len(cases)} cases")
+    # Same as the API import path: one version bump per batch so experiments can
+    # record which dataset version they ran against.
+    version = await queries.bump_dataset_version(dataset_id)
+    print(f"Imported {len(cases)} cases (dataset version {version})")
     return 0
 
 
@@ -182,9 +187,16 @@ async def cmd_summary(args):
     print(f"  Avg Score:  {summary.avg_score}")
     print(f"  Median:     {summary.median_score}")
     print(f"  Pass Rate:  {summary.passed}/{summary.total_cases} ({summary.pass_rate:.1%})")
-    print(f"  Pass All:   {summary.pass_all_rate:.1%}")
+    print(f"  Pass Rule:  {summary.pass_rule}")
+    print(f"  All Trials: {summary.pass_all_rate:.1%} (cases where every trial passed)")
     print(f"  Consistency: {summary.consistency_rate:.1f} (lower = more consistent)")
     print(f"  Avg Duration: {summary.avg_duration}s")
+
+    if summary.check_pass_rates:
+        # Weakest checks first: these are what pull the pass rate down
+        print(f"\n  Checks (pass rate where the check ran):")
+        for name, c in sorted(summary.check_pass_rates.items(), key=lambda kv: (kv[1]["rate"], kv[0])):
+            print(f"    {name:25s}: {c['passed']}/{c['total']} ({c['rate']:.0%})")
 
     if summary.failure_funnel_dist:
         print(f"\n  Failure Funnel:")

@@ -55,8 +55,8 @@ Why FAIL: Price 33% wrong (critical for purchase), low source diversity. Close t
 2. Read the **Guide** tab (main output)
 3. Check **Products** tab (are they real? prices reasonable?)
 4. Check **Sources** tab (are URLs real? do domains match claims?)
-5. Click **Pass** or **Fail** button in top-right
-6. (Optional) Add per-grader scores in **Scores** tab
+5. Click **Pass** or **Fail** button in top-right. Machine scores, the Scores/Logs/AI tabs and the grader breakdown stay hidden until you do (blind labeling), so judge from the trace itself
+6. (Optional) Score individual graders in the **Human Calibration** panel on the right (≥70 counts as Pass); each grader's LLM score appears after you score it
 7. (Optional) Add open codes in **Codes** tab for pattern tracking
 
 ## Time Target

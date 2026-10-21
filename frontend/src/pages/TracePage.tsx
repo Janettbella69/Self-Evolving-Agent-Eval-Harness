@@ -20,9 +20,13 @@ export default function TracePage() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<TabKey>('guide')
   const [reviewAction, setReviewAction] = useState<string | null>(null)
+  // Blind labeling: machine verdicts stay hidden until a human labels the trace
+  // (or reveals them), so the automated result can't anchor the human's judgment.
+  const [revealed, setRevealed] = useState(false)
 
   useEffect(() => {
     if (!id) return
+    setRevealed(false)
     getTrace(Number(id)).then(setTrace).finally(() => setLoading(false))
   }, [id])
 
@@ -37,10 +41,14 @@ export default function TracePage() {
   if (!trace) return <div className="text-red-500">Trace not found.</div>
 
   const toolHistory = (trace.hook_metrics as Record<string, unknown>)?.tool_call_history as Array<{tool: string; args: Record<string, string>; ts: number; seq: number}> | undefined
+  const blind = (trace.human_pass === null || trace.human_pass === undefined) && !revealed
+  const machineTabs: TabKey[] = ['scores', 'logs', 'ai']
   const tabs: TabKey[] = ['guide', 'products', 'sources', 'events', 'tools', 'scores', 'logs', 'config', 'codes', 'ai']
+    .filter(t => !blind || !machineTabs.includes(t as TabKey)) as TabKey[]
   if (trace.case_type === 'shoppingcomp' || trace.case_type === 'trap') {
     tabs.push('rubric')
   }
+  const activeTab: TabKey = tabs.includes(tab) ? tab : 'guide'
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -121,7 +129,16 @@ export default function TracePage() {
           </div>
         </div>
         <div className="flex flex-col items-end gap-2">
-          <ScoreBadge score={trace.final_score} pass={trace.final_pass} size="lg" />
+          {blind ? (
+            <button
+              onClick={() => setRevealed(true)}
+              className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-400 hover:text-slate-600"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>visibility_off</span>
+            </button>
+          ) : (
+            <ScoreBadge score={trace.final_score} pass={trace.final_pass} size="lg" />
+          )}
           <HumanPassButton trace={trace} onUpdated={setTrace} />
           <SaveToDatasetButton trace={trace} />
           <BackflowButton trace={trace} />
@@ -135,7 +152,7 @@ export default function TracePage() {
             key={t}
             onClick={() => setTab(t)}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === t
+              activeTab === t
                 ? 'border-emerald-600 text-emerald-700'
                 : 'border-transparent text-slate-500 hover:text-slate-700'
             }`}
@@ -154,7 +171,7 @@ export default function TracePage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main content */}
         <div className="lg:col-span-2">
-          {tab === 'guide' && (
+          {activeTab === 'guide' && (
             <div className="rounded-xl bg-white border border-slate-200 p-6 prose prose-slate max-w-none">
               {trace.guide_text ? (
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -166,7 +183,7 @@ export default function TracePage() {
             </div>
           )}
 
-          {tab === 'products' && (
+          {activeTab === 'products' && (
             <div className="space-y-3">
               {trace.products.map((p, i) => {
                 const product = p as Record<string, string>
@@ -196,7 +213,7 @@ export default function TracePage() {
             </div>
           )}
 
-          {tab === 'sources' && (
+          {activeTab === 'sources' && (
             <div className="space-y-2">
               {trace.sources.map((s, i) => {
                 const source = s as Record<string, string>
@@ -222,9 +239,9 @@ export default function TracePage() {
             </div>
           )}
 
-          {tab === 'events' && <TraceTimeline events={trace.events} />}
+          {activeTab === 'events' && <TraceTimeline events={trace.events} />}
 
-          {tab === 'tools' && (
+          {activeTab === 'tools' && (
             <div className="rounded-xl bg-white border border-slate-200 overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
                 <h4 className="text-sm font-semibold text-slate-700">Tool Call History</h4>
@@ -270,29 +287,31 @@ export default function TracePage() {
             </div>
           )}
 
-          {tab === 'scores' && <ScoresTab trace={trace} />}
+          {activeTab === 'scores' && <ScoresTab trace={trace} />}
 
-          {tab === 'logs' && <LogsTab trace={trace} />}
+          {activeTab === 'logs' && <LogsTab trace={trace} />}
 
-          {tab === 'config' && <ConfigTab trace={trace} />}
+          {activeTab === 'config' && <ConfigTab trace={trace} />}
 
-          {tab === 'codes' && <CodesTab trace={trace} onUpdated={setTrace} />}
+          {activeTab === 'codes' && <CodesTab trace={trace} onUpdated={setTrace} />}
 
-          {tab === 'ai' && <AIAnalysisTab trace={trace} />}
+          {activeTab === 'ai' && <AIAnalysisTab trace={trace} />}
 
-          {tab === 'rubric' && <RubricTab trace={trace} />}
+          {activeTab === 'rubric' && <RubricTab trace={trace} />}
         </div>
 
         {/* Score breakdown sidebar */}
         <div className="space-y-4">
-          <GraderBreakdown
-            l0={trace.l0_scores}
-            l1={trace.l1_scores}
-            l2={trace.l2_scores}
-            compositeScores={trace.composite_scores}
-            failureFunnel={trace.failure_funnel}
-            gate={(trace as unknown as Record<string, unknown>).gate as { results: Record<string, boolean>; passed: boolean } | undefined}
-          />
+          {!blind && (
+            <GraderBreakdown
+              l0={trace.l0_scores}
+              l1={trace.l1_scores}
+              l2={trace.l2_scores}
+              compositeScores={trace.composite_scores}
+              failureFunnel={trace.failure_funnel}
+              gate={(trace as unknown as Record<string, unknown>).gate as { results: Record<string, boolean>; passed: boolean } | undefined}
+            />
+          )}
 
           {/* Human Annotation Panel */}
           {trace.composite_scores && Object.keys(trace.composite_scores).length > 0 && (
@@ -572,9 +591,10 @@ function HumanAnnotationPanel({ trace, onAnnotated }: { trace: Trace; onAnnotate
             <div key={name} className="rounded-lg border border-slate-100 p-2.5">
               <div className="flex items-center gap-2">
                 <span className="text-xs text-slate-600 flex-1 truncate">{name.replace(/_/g, ' ')}</span>
-                <span className="text-xs tabular-nums text-slate-500">LLM: {llmData.score.toFixed(0)}</span>
+                {/* The LLM score shows only after the human scores this grader (blind labeling) */}
                 {humanData ? (
                   <>
+                    <span className="text-xs tabular-nums text-slate-500">LLM: {llmData.score.toFixed(0)}</span>
                     <span className={`text-xs tabular-nums font-medium ${
                       Math.abs(humanData.score - llmData.score) <= 15 ? 'text-emerald-600' : 'text-red-600'
                     }`}>

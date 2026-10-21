@@ -217,19 +217,20 @@ export default function OverviewPage() {
                 <div />
                 <div className="text-slate-400 font-medium py-1">Judge Pass</div>
                 <div className="text-slate-400 font-medium py-1">Judge Fail</div>
+                {/* Failure is the positive class: TP = both Fail, TN = both Pass */}
                 <div className="text-slate-400 font-medium py-1 text-right pr-2">Human Pass</div>
                 <div className="bg-emerald-50 text-emerald-700 font-bold py-1.5 rounded">
-                  TP {alignment.tp}
+                  TN {alignment.tn}
                 </div>
-                <div className="bg-red-50 text-red-600 font-bold py-1.5 rounded">
-                  FN {alignment.fn}
-                </div>
-                <div className="text-slate-400 font-medium py-1 text-right pr-2">Human Fail</div>
                 <div className="bg-red-50 text-red-600 font-bold py-1.5 rounded">
                   FP {alignment.fp}
                 </div>
+                <div className="text-slate-400 font-medium py-1 text-right pr-2">Human Fail</div>
+                <div className="bg-red-50 text-red-600 font-bold py-1.5 rounded">
+                  FN {alignment.fn}
+                </div>
                 <div className="bg-emerald-50 text-emerald-700 font-bold py-1.5 rounded">
-                  TN {alignment.tn}
+                  TP {alignment.tp}
                 </div>
               </div>
             </div>

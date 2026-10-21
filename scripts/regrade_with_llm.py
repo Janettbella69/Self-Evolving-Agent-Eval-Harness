@@ -5,7 +5,7 @@ Only targets traces with actual guide text (>500 chars).
 Uses JUDGE_ENABLED=true from .env — does NOT override it.
 
 Usage:
-    python eval/scripts/regrade_with_llm.py [--limit N] [--dry-run]
+    python scripts/regrade_with_llm.py [--limit N] [--dry-run]
 """
 
 import asyncio
@@ -16,8 +16,8 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=True)
-load_dotenv(Path(__file__).resolve().parent.parent.parent / "backend" / ".env", override=True)
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)  # optional repo-root .env
+load_dotenv(Path(__file__).resolve().parent.parent / "backend" / ".env", override=True)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 os.environ.pop("CLAUDECODE", None)
@@ -119,10 +119,11 @@ async def main():
             )
 
             await db.execute(
-                """UPDATE traces SET status='graded', final_score=?, final_pass=?,
+                """UPDATE traces SET status='graded', final_score=?, final_pass=?, checks=?,
                    composite_scores=?, failure_funnel=?, error_types=?,
                    grading_duration_s=?, grading_log=? WHERE id=?""",
                 (score, passed,
+                 json.dumps(grades.get("checks", {})),
                  json.dumps(grades.get("composite_scores", {})),
                  json.dumps(grades.get("failure_funnel", {})),
                  json.dumps(grades.get("error_types", [])),

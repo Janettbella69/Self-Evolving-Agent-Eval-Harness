@@ -20,18 +20,56 @@ EVAL_API_KEY = os.getenv("EVAL_API_KEY", "")
 # Kept here for reference; Agent SDK picks up ANTHROPIC_API_KEY from os.environ.
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-# L2 grading model — MUST be stronger than the product orchestrator (claude-sonnet-4-6).
-# Judge needs superior reasoning to catch errors the weaker model makes.
-# Uses OpenRouter (ANTHROPIC_BASE_URL) to access cross-vendor models.
-GRADING_MODEL = os.getenv("GRADING_MODEL", "openai/gpt-5.4")
+# Optional Anthropic-compatible gateway (e.g. OpenRouter). The Agent SDK and the
+# anthropic client read ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN from the environment;
+# non-Anthropic model ids such as "openai/gpt-6-luna" only resolve through such a gateway.
+ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "")
+
+# L2 grading model. Start with a capable model so the judge prompt is easy to get right,
+# then try cheaper ones and keep whichever still agrees with human labels
+# (validate_evaluator.py). Per the evals FAQ, the product's own model is usually fine:
+# what matters is agreement with humans, not relative strength.
+# Default since 2026-10-21: Claude Haiku 5.5. The judge runs on the Claude Agent SDK
+# (Claude Code), which speaks Anthropic's API natively, so a Claude model needs no
+# translation by the gateway. $0.10 in / $0.50 out per M tokens for prompts up to 100K
+# tokens ($0.50 / $2.50 above that; judge prompts stay well below), vs $2.50 / $15 for
+# the previous openai/gpt-5.4. Not yet validated on our own human labels.
+# "anthropic/claude-haiku-5.5" is the OpenRouter id (see ANTHROPIC_BASE_URL above);
+# with a plain Anthropic key, set GRADING_MODEL=claude-haiku-5-5.
+GRADING_MODEL = os.getenv("GRADING_MODEL", "anthropic/claude-haiku-5.5")
+
+# Fallback judge model when GRADING_MODEL fails (Agent SDK fallback_model).
+# openai/gpt-6-luna: same price as Claude Haiku 5.5 on OpenRouter, from another provider,
+# so an outage on one side doesn't take both down. The previous default,
+# minimax/minimax-m2.7-highspeed, is not listed on OpenRouter. Like the primary, this is an
+# OpenRouter id; with a plain Anthropic key set a Claude model such as claude-sonnet-5-5.
+GRADING_FALLBACK_MODEL = os.getenv("GRADING_FALLBACK_MODEL", "openai/gpt-6-luna")
+
+# Model that answers the product agent's clarification questions on the user's behalf
+# (runner/executor.py). Only has to pick an option, so a cheap model is fine.
+USER_SIMULATOR_MODEL = os.getenv("USER_SIMULATOR_MODEL", "minimax/minimax-m2.7")
 
 # Scoring thresholds
 # Calibrated 2026-03-28: human=Pass at 59.2, human=Fail at 51.6 → threshold 60
 # Re-calibrate after 50+ annotations (Hamel audit action #3)
+# Decides pass/fail only under PASS_RULE=composite.
 PASS_THRESHOLD = int(os.getenv("PASS_THRESHOLD", "60"))
+
+# How a trace passes. "pass_all" (default): every binary check passes, i.e. the gate
+# checks plus each LLM judge's own Pass/Fail (the evals FAQ combines binary evals
+# into a pass-all rate). "composite": the weighted 0-100 score must reach
+# PASS_THRESHOLD, the rule before 2026-10-21. The weighted score is stored either way.
+PASS_RULE = os.getenv("PASS_RULE", "pass_all").strip().lower()
+if PASS_RULE not in ("pass_all", "composite"):
+    raise ValueError(f"PASS_RULE must be 'pass_all' or 'composite', got {PASS_RULE!r}")
 
 # L2 judge toggle
 JUDGE_ENABLED = os.getenv("JUDGE_ENABLED", "").lower() in ("1", "true", "yes")
+
+# Legacy L2 judge (graders/l2_judge.py): one more judge call per trace rating five
+# generic dimensions (relevance, completeness, objectivity, ...). Off by default; its
+# result is only stored in l2_scores and used for negative cases under PASS_RULE=composite.
+LEGACY_L2_ENABLED = os.getenv("LEGACY_L2_ENABLED", "").lower() in ("1", "true", "yes")
 
 # Judge preset mode — Claude Code preset gives full autonomy (WebSearch, Bash, Read, etc.)
 # but adds ~60s startup overhead and can timeout with OpenRouter models.
@@ -41,6 +79,13 @@ JUDGE_PRESET = os.getenv("JUDGE_PRESET", "false").lower() in ("1", "true", "yes"
 # Judge max turns — preset mode needs more turns for verification workflows
 JUDGE_MAX_TURNS_PRESET = int(os.getenv("JUDGE_MAX_TURNS_PRESET", "20"))
 JUDGE_MAX_TURNS_BASIC = int(os.getenv("JUDGE_MAX_TURNS_BASIC", "10"))
+
+# Judge effort, set explicitly so it doesn't depend on Claude Code recognizing
+# GRADING_MODEL: an OpenRouter id such as anthropic/claude-haiku-5.5 isn't recognized
+# and gets "high". "medium" is Claude Haiku 5.5's own default.
+JUDGE_EFFORT = os.getenv("JUDGE_EFFORT", "medium").strip().lower()
+if JUDGE_EFFORT not in ("low", "medium", "high", "xhigh", "max"):
+    raise ValueError(f"JUDGE_EFFORT must be low, medium, high, xhigh or max, got {JUDGE_EFFORT!r}")
 
 # LangFuse — production trace import
 LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")

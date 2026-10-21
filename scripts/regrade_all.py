@@ -20,8 +20,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=True)
-load_dotenv(Path(__file__).resolve().parent.parent.parent / "backend" / ".env", override=True)
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)  # optional repo-root .env
+load_dotenv(Path(__file__).resolve().parent.parent / "backend" / ".env", override=True)
 
 # Prevent nested Agent SDK session conflict (critical when run from Claude Code)
 os.environ.pop("CLAUDECODE", None)
@@ -147,6 +147,7 @@ async def main():
                 "status": "graded",
                 "final_score": new_score,
                 "final_pass": new_pass,
+                "checks": grades.get("checks", {}),
                 "l0_scores": grades.get("l0", {}),
                 "l1_scores": grades.get("l1", {}),
                 "composite_scores": grades.get("composite_scores", {}),

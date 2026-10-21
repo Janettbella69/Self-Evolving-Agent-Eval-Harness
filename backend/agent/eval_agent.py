@@ -1,10 +1,11 @@
 """Eval agent — Claude Agent SDK powered evaluation.
 
 Supports two execution modes (controlled by JUDGE_PRESET config):
-1. Preset mode (default): Uses preset="claude_code" for full Claude Code capabilities
-   — WebSearch, WebFetch, Bash, Read, Grep, Glob + eval tools
+1. Preset mode (JUDGE_PRESET=true): Uses preset="claude_code"; the only built-in tools
+   loaded are WebSearch, WebFetch, Bash, Read, Grep, Glob, plus the eval tools
    — Deep verification: spot-checks prices, cross-references sources, analyzes codebase
-2. Basic mode: Custom system prompt with only eval tools (score_grader + verify_url)
+2. Basic mode (default): Custom system prompt, no built-in tools, only the eval tools
+   (score_grader / score_dimension + verify_url)
    — Lightweight, faster, cheaper
 
 Both modes support:
@@ -26,7 +27,7 @@ from claude_agent_sdk import (
 
 logger = logging.getLogger(__name__)
 
-from agent.tools import create_eval_tools_server, init_scores, get_scores
+from agent.tools import create_eval_tools_server
 
 
 # ── Eval Agent Hooks (Harness Engineering) ────────────────────────────
@@ -36,14 +37,17 @@ from agent.tools import create_eval_tools_server, init_scores, get_scores
 # 2. PreToolUse(score_grader): validate verdict format before accepting
 # 3. PostToolUseFailure: log and guide agent to retry
 
-async def _on_eval_stop(input_data: dict, tool_use_id, context) -> dict:
+def _make_eval_stop_hook(scores: dict):
     """Stop hook: detect when agent finishes without scoring.
 
     If no score_grader call was made, inject a system message forcing
     the agent to make a decision. This is the #1 eval agent failure mode.
+    Bound to this run's score store so concurrent runs don't see each other.
     """
-    scores = get_scores()
-    if not scores:
+
+    async def _on_eval_stop(input_data: dict, tool_use_id, context) -> dict:
+        if scores:
+            return {}
         logger.warning("Eval agent Stop hook: no score recorded — injecting reminder")
         return {
             "systemMessage": (
@@ -54,7 +58,8 @@ async def _on_eval_stop(input_data: dict, tool_use_id, context) -> dict:
             ),
             "stopReason": "tool_use",  # Force agent to continue
         }
-    return {}
+
+    return _on_eval_stop
 
 
 async def _on_eval_pre_score(input_data: dict, tool_use_id, context) -> dict:
@@ -95,11 +100,11 @@ async def _on_eval_tool_failure(input_data: dict, tool_use_id, context) -> dict:
     }
 
 
-def _get_eval_hooks() -> dict:
-    """Build hooks config for the eval agent."""
+def _get_eval_hooks(scores: dict) -> dict:
+    """Build hooks config for one eval agent run."""
     return {
         "Stop": [
-            HookMatcher(hooks=[_on_eval_stop]),
+            HookMatcher(hooks=[_make_eval_stop_hook(scores)]),
         ],
         "PreToolUse": [
             HookMatcher(
@@ -114,6 +119,8 @@ def _get_eval_hooks() -> dict:
     }
 from config import (
     GRADING_MODEL,
+    GRADING_FALLBACK_MODEL,
+    JUDGE_EFFORT,
     JUDGE_PRESET,
     JUDGE_MAX_TURNS_PRESET,
     JUDGE_MAX_TURNS_BASIC,
@@ -202,8 +209,8 @@ _BASIC_TOOLS_GRADER = [
     "mcp__eval-tools__verify_url",
 ]
 
-# Claude Code preset tools — the preset provides Read/Bash/Grep/Glob/WebSearch/WebFetch
-# automatically; we just need to also allow our MCP eval tools.
+# Claude Code built-in tools for preset mode — the only built-ins loaded there.
+# Basic mode loads none.
 _PRESET_EXTRA_TOOLS = [
     "WebSearch",
     "WebFetch",
@@ -217,19 +224,20 @@ _PRESET_EXTRA_TOOLS = [
 def _build_options(
     prompt_text: str,
     tools_server,
+    scores: dict,
     is_l2: bool = False,
 ) -> ClaudeAgentOptions:
     """Build ClaudeAgentOptions for either preset or basic mode.
 
     In preset mode:
       - system_prompt = {"type": "preset", "preset": "claude_code", "append": prompt_text + capabilities}
-      - allowed_tools = eval MCP tools + Claude Code built-in tools
+      - tools = the six built-ins in _PRESET_EXTRA_TOOLS; allowed_tools = those + eval MCP tools
       - max_turns = JUDGE_MAX_TURNS_PRESET (default 20)
 
     In basic mode:
       - system_prompt = prompt_text (plain string)
-      - allowed_tools = only eval MCP tools
-      - max_turns = JUDGE_MAX_TURNS_BASIC (default 6)
+      - tools = [] (no built-ins); allowed_tools = only eval MCP tools
+      - max_turns = JUDGE_MAX_TURNS_BASIC (default 10)
     """
     base_tools = _BASIC_TOOLS_L2 if is_l2 else _BASIC_TOOLS_GRADER
 
@@ -239,15 +247,17 @@ def _build_options(
             "preset": "claude_code",
             "append": prompt_text + "\n" + judge_capabilities(),
         }
+        builtin_tools = list(_PRESET_EXTRA_TOOLS)
         allowed_tools = base_tools + _PRESET_EXTRA_TOOLS
         max_turns = JUDGE_MAX_TURNS_PRESET if is_l2 else min(JUDGE_MAX_TURNS_PRESET, 15)
     else:
         system_prompt = prompt_text
+        builtin_tools = []
         allowed_tools = base_tools
         max_turns = 10 if is_l2 else JUDGE_MAX_TURNS_BASIC
 
-    # Fallback model: if GRADING_MODEL fails, try a cheaper alternative
-    fallback = os.getenv("GRADING_FALLBACK_MODEL", "minimax/minimax-m2.7-highspeed")
+    # Fallback model: if GRADING_MODEL fails, try a cheaper alternative (config.GRADING_FALLBACK_MODEL)
+    fallback = GRADING_FALLBACK_MODEL
 
     return ClaudeAgentOptions(
         system_prompt=system_prompt,
@@ -255,10 +265,19 @@ def _build_options(
         fallback_model=fallback,
         max_turns=max_turns,
         permission_mode="bypassPermissions",
+        # allowed_tools only pre-approves tools; it doesn't limit bypassPermissions or what
+        # the model sees. Without `tools`, every Claude Code built-in (Bash, Write, Agent, ...)
+        # was loaded and callable: ~17K tokens of definitions on every request.
+        tools=builtin_tools,
         allowed_tools=allowed_tools,
         mcp_servers={"eval-tools": tools_server},
         thinking=ThinkingConfigAdaptive(type="adaptive"),
-        hooks=_get_eval_hooks(),
+        effort=JUDGE_EFFORT,
+        hooks=_get_eval_hooks(scores),
+        # Claude Code 2.1.304+ turns tool search on behind an ANTHROPIC_BASE_URL gateway,
+        # which hides score_grader behind ToolSearch and costs the judge an extra turn
+        # to find the one tool it must call. Load the eval tools upfront, as before.
+        env={"ENABLE_TOOL_SEARCH": "false"},
     )
 
 
@@ -363,14 +382,14 @@ async def run_eval_agent(
     Returns:
         {"dimensions": {"name": "PASS"|"FAIL"|"UNKNOWN"}, "l2_score": float | None}
     """
-    init_scores()
+    scores: dict = {}  # per-run score store (see agent/tools.py)
 
     prompt_text = EVAL_AGENT_PROMPT.format(
         dimensions_block=_build_dimensions_block(),
     )
 
-    tools_server = create_eval_tools_server()
-    options = _build_options(prompt_text, tools_server, is_l2=True)
+    tools_server = create_eval_tools_server(scores)
+    options = _build_options(prompt_text, tools_server, scores, is_l2=True)
 
     message = _build_eval_message(
         query=query,
@@ -394,7 +413,7 @@ async def run_eval_agent(
             os.environ["CLAUDECODE"] = env_backup
 
     # Collect scores from tool calls
-    raw_scores = get_scores()
+    raw_scores = scores
 
     dimensions = {}
     for dim in L2_DIMENSIONS:
@@ -432,13 +451,13 @@ async def run_eval_grader(
     Returns:
         {"score": float, "result": str, "reasoning": str, ...} or None on failure.
     """
-    init_scores()
+    scores: dict = {}  # per-run score store (see agent/tools.py)
 
     # Prevent nested Claude Code session blocking Agent SDK
     env_backup = os.environ.pop("CLAUDECODE", None)
 
-    tools_server = create_eval_tools_server()
-    options = _build_options(system_prompt, tools_server, is_l2=False)
+    tools_server = create_eval_tools_server(scores)
+    options = _build_options(system_prompt, tools_server, scores, is_l2=False)
 
     num_turns = 0
     try:
@@ -463,7 +482,7 @@ async def run_eval_grader(
             os.environ["CLAUDECODE"] = env_backup
 
     # Case-insensitive lookup — LLM may send "Groundedness" instead of "groundedness"
-    raw_scores = get_scores()
+    raw_scores = scores
     grader_data = raw_scores.get(grader_name)
     if not grader_data:
         # Fallback: case-insensitive search
