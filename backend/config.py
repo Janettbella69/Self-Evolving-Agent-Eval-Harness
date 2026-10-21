@@ -25,8 +25,10 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 # non-Anthropic model ids such as "openai/gpt-5.4" only resolve through such a gateway.
 ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "")
 
-# L2 grading model — MUST be stronger than the product orchestrator (claude-sonnet-4-6).
-# Judge needs superior reasoning to catch errors the weaker model makes.
+# L2 grading model. Start with a capable model so the judge prompt is easy to get right,
+# then try cheaper ones and keep whichever still agrees with human labels
+# (validate_evaluator.py). Per the evals FAQ, the product's own model is usually fine:
+# what matters is agreement with humans, not relative strength.
 # Default assumes an OpenRouter-style gateway (see ANTHROPIC_BASE_URL above);
 # with a plain Anthropic key, set GRADING_MODEL to a Claude model.
 GRADING_MODEL = os.getenv("GRADING_MODEL", "openai/gpt-5.4")
@@ -41,10 +43,24 @@ USER_SIMULATOR_MODEL = os.getenv("USER_SIMULATOR_MODEL", "minimax/minimax-m2.7")
 # Scoring thresholds
 # Calibrated 2026-03-28: human=Pass at 59.2, human=Fail at 51.6 → threshold 60
 # Re-calibrate after 50+ annotations (Hamel audit action #3)
+# Decides pass/fail only under PASS_RULE=composite.
 PASS_THRESHOLD = int(os.getenv("PASS_THRESHOLD", "60"))
+
+# How a trace passes. "pass_all" (default): every binary check passes, i.e. the gate
+# checks plus each LLM judge's own Pass/Fail (the evals FAQ combines binary evals
+# into a pass-all rate). "composite": the weighted 0-100 score must reach
+# PASS_THRESHOLD, the rule before 2026-10-21. The weighted score is stored either way.
+PASS_RULE = os.getenv("PASS_RULE", "pass_all").strip().lower()
+if PASS_RULE not in ("pass_all", "composite"):
+    raise ValueError(f"PASS_RULE must be 'pass_all' or 'composite', got {PASS_RULE!r}")
 
 # L2 judge toggle
 JUDGE_ENABLED = os.getenv("JUDGE_ENABLED", "").lower() in ("1", "true", "yes")
+
+# Legacy L2 judge (graders/l2_judge.py): one more judge call per trace rating five
+# generic dimensions (relevance, completeness, objectivity, ...). Off by default; its
+# result is only stored in l2_scores and used for negative cases under PASS_RULE=composite.
+LEGACY_L2_ENABLED = os.getenv("LEGACY_L2_ENABLED", "").lower() in ("1", "true", "yes")
 
 # Judge preset mode — Claude Code preset gives full autonomy (WebSearch, Bash, Read, etc.)
 # but adds ~60s startup overhead and can timeout with OpenRouter models.

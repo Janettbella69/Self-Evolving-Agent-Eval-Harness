@@ -119,10 +119,11 @@ async def main():
             )
 
             await db.execute(
-                """UPDATE traces SET status='graded', final_score=?, final_pass=?,
+                """UPDATE traces SET status='graded', final_score=?, final_pass=?, checks=?,
                    composite_scores=?, failure_funnel=?, error_types=?,
                    grading_duration_s=?, grading_log=? WHERE id=?""",
                 (score, passed,
+                 json.dumps(grades.get("checks", {})),
                  json.dumps(grades.get("composite_scores", {})),
                  json.dumps(grades.get("failure_funnel", {})),
                  json.dumps(grades.get("error_types", [])),

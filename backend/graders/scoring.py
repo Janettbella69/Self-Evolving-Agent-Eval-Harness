@@ -1,15 +1,17 @@
-"""Score computation: Pass/Fail gate + composite scoring.
+"""Score computation: Pass/Fail gate, binary checks, composite scoring.
 
-Two-layer scoring:
-  Layer 1: Pass/Fail Gate (deterministic, binary)
-  Layer 2: Composite Score (weighted 0-100)
+  Gate: deterministic binary checks on the result's shape
+  Checks: gate checks + each LLM judge's own Pass/Fail; under PASS_RULE=pass_all
+          a trace passes only if every check passes
+  Composite Score: weighted 0-100, decides pass only under PASS_RULE=composite
 """
 
 from runner.collector import CollectedResult
 from graders.types import (
     GATE_CHECKS_POSITIVE, GATE_CHECKS_TRAP,
-    NEGATIVE_TYPES, TRAP_TYPES,
+    NEGATIVE_TYPES, TRAP_TYPES, GraderResult,
 )
+from graders.validation import judge_passed
 from config import PASS_THRESHOLD
 
 
@@ -35,6 +37,37 @@ def compute_pass_fail_gate(
 
     all_passed = all(gate_results.values())
     return gate_results, all_passed
+
+
+def build_checks(
+    gate_results: dict[str, bool],
+    grader_results: list[GraderResult],
+) -> dict[str, bool]:
+    """Binary checks for one trace: the gate checks plus each LLM judge's Pass/Fail.
+
+    Code graders return 0-100 heuristic scores with no Pass/Fail of their own, so
+    they stay diagnostic and only feed the composite score. Judges that were
+    skipped or errored are absent from grader_results and add no check.
+    """
+    checks = {f"gate.{name}": bool(ok) for name, ok in gate_results.items()}
+    for g in grader_results:
+        if g.category != "llm":
+            continue
+        passed = judge_passed({"score": g.score, "details": g.details})
+        if passed is not None:
+            checks[g.name] = passed
+    return checks
+
+
+def decide_pass(checks: dict[str, bool], composite_pass: bool, rule: str) -> bool:
+    """Whether a trace passes under PASS_RULE.
+
+    pass_all: every check passed. composite: the weighted score reached
+    PASS_THRESHOLD (callers have already forced composite_pass off on a gate failure).
+    """
+    if rule == "composite":
+        return composite_pass
+    return all(checks.values())
 
 
 def compute_final_score(

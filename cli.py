@@ -187,9 +187,16 @@ async def cmd_summary(args):
     print(f"  Avg Score:  {summary.avg_score}")
     print(f"  Median:     {summary.median_score}")
     print(f"  Pass Rate:  {summary.passed}/{summary.total_cases} ({summary.pass_rate:.1%})")
-    print(f"  Pass All:   {summary.pass_all_rate:.1%}")
+    print(f"  Pass Rule:  {summary.pass_rule}")
+    print(f"  All Trials: {summary.pass_all_rate:.1%} (cases where every trial passed)")
     print(f"  Consistency: {summary.consistency_rate:.1f} (lower = more consistent)")
     print(f"  Avg Duration: {summary.avg_duration}s")
+
+    if summary.check_pass_rates:
+        # Weakest checks first: these are what pull the pass rate down
+        print(f"\n  Checks (pass rate where the check ran):")
+        for name, c in sorted(summary.check_pass_rates.items(), key=lambda kv: (kv[1]["rate"], kv[0])):
+            print(f"    {name:25s}: {c['passed']}/{c['total']} ({c['rate']:.0%})")
 
     if summary.failure_funnel_dist:
         print(f"\n  Failure Funnel:")

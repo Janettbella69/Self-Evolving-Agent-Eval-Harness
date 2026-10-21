@@ -182,6 +182,7 @@ def _grades_to_trace_update(grades: dict) -> dict:
         "l2_scores": grades.get("l2"),
         "final_score": grades.get("final_score", 0),
         "final_pass": int(grades.get("final_pass", False)),
+        "checks": grades.get("checks", {}),
         "composite_scores": grades.get("composite_scores", {}),
         "failure_funnel": grades.get("failure_funnel", {}),
         "error_types": grades.get("error_types", []),

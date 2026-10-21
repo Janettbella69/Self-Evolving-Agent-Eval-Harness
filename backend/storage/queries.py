@@ -298,7 +298,7 @@ async def update_trace(trace_id: int, **kwargs):
     # Serialize complex fields to JSON
     json_fields = {"products", "sources", "events", "hook_metrics",
                    "error_events", "clarification", "l0_scores", "l1_scores", "l2_scores",
-                   "composite_scores", "failure_funnel", "error_types",
+                   "checks", "composite_scores", "failure_funnel", "error_types",
                    "human_scores", "grading_log", "tool_names", "judge_prompts"}
     sets = []
     values = []
@@ -374,6 +374,7 @@ def _row_to_trace(r) -> Trace:
         l2_scores=_parse(r["l2_scores"], None),
         final_score=r["final_score"] or 0,
         final_pass=bool(r["final_pass"]),
+        checks=_parse(_safe_get(r, "checks", "{}"), {}),
         composite_scores=_parse(_safe_get(r, "composite_scores", "{}"), {}),
         failure_funnel=_parse(_safe_get(r, "failure_funnel", "{}"), {}),
         error_types=_parse(_safe_get(r, "error_types", "[]"), []),
@@ -399,6 +400,8 @@ def _row_to_trace(r) -> Trace:
 
 
 async def compute_experiment_summary(experiment_id: int) -> ExperimentSummary:
+    from config import PASS_RULE
+
     exp = await get_experiment(experiment_id)
     ds = await get_dataset(exp.dataset_id) if exp else None
     suite_type = ds.suite_type if ds else "capability"
@@ -448,6 +451,18 @@ async def compute_experiment_summary(experiment_id: int) -> ExperimentSummary:
     grader_averages = {
         name: round(sum(vals) / len(vals), 1)
         for name, vals in grader_sums.items() if vals
+    }
+
+    # Per-check pass rates: drill-down behind final_pass. A check counts only on
+    # traces where it ran (e.g. judges skipped without golden data add nothing).
+    check_counts: dict[str, list[int]] = defaultdict(lambda: [0, 0])  # name -> [passed, ran]
+    for t in completed:
+        for name, ok in (t.checks or {}).items():
+            check_counts[name][0] += int(bool(ok))
+            check_counts[name][1] += 1
+    check_pass_rates = {
+        name: {"passed": passed, "total": ran, "rate": round(passed / ran, 3)}
+        for name, (passed, ran) in sorted(check_counts.items())
     }
 
     # pass@k for multiple k values
@@ -507,6 +522,8 @@ async def compute_experiment_summary(experiment_id: int) -> ExperimentSummary:
         consistency_rate=round(sum(consistency_scores) / len(consistency_scores), 1) if consistency_scores else 0,
         failure_funnel_dist=funnel_dist,
         grader_averages=grader_averages,
+        check_pass_rates=check_pass_rates,
+        pass_rule=PASS_RULE,
         pass_at_k=pass_at_k,
         pass_pow_k=pass_pow_k,
         suite_type=suite_type,

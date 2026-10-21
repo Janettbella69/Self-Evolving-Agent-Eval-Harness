@@ -123,6 +123,7 @@ async def regrade_code_only(experiment_id: int | None = None, limit: int = 0):
                 """UPDATE traces SET
                     status='graded',
                     final_score=?, final_pass=?,
+                    checks=?,
                     composite_scores=?,
                     failure_funnel=?,
                     error_types=?,
@@ -132,6 +133,7 @@ async def regrade_code_only(experiment_id: int | None = None, limit: int = 0):
                 (
                     grades.get("final_score", 0),
                     int(grades.get("final_pass", False)),
+                    json.dumps(grades.get("checks", {})),
                     json.dumps(grades.get("composite_scores", {})),
                     json.dumps(grades.get("failure_funnel", {})),
                     json.dumps(grades.get("error_types", [])),

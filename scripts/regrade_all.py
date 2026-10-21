@@ -147,6 +147,7 @@ async def main():
                 "status": "graded",
                 "final_score": new_score,
                 "final_pass": new_pass,
+                "checks": grades.get("checks", {}),
                 "l0_scores": grades.get("l0", {}),
                 "l1_scores": grades.get("l1", {}),
                 "composite_scores": grades.get("composite_scores", {}),

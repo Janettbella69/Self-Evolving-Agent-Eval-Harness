@@ -1,9 +1,10 @@
-"""Full grading pipeline: Gate → Code Graders → LLM Graders → Funnel → Composite.
+"""Full grading pipeline: Gate → Code Graders → LLM Graders → Funnel → Composite → Pass.
 
 Two-phase design:
   Phase 1 (collect): Saves raw trace with status="collected"
   Phase 2 (grade): Runs this pipeline, updates trace with scores
 
+The pass decision follows config.PASS_RULE (see graders/scoring.py).
 This pipeline can be re-run on existing traces (re-grade).
 """
 
@@ -11,7 +12,7 @@ import time
 
 from runner.collector import CollectedResult
 from graders.types import GraderResult, GRADER_DEFS, NEGATIVE_TYPES, TRAP_TYPES
-from graders.scoring import compute_pass_fail_gate
+from graders.scoring import build_checks, compute_pass_fail_gate, decide_pass
 from graders.composite import compute_composite_score, get_effective_weights
 from graders.failure_funnel import detect_failure_stage
 from graders.search_quality import grade_search_quality
@@ -40,6 +41,8 @@ async def grade_trace(result: CollectedResult, case: dict) -> dict:
 
     Returns dict with all grading details for DB storage.
     """
+    from config import PASS_RULE
+
     t0 = time.time()
     grading_log: list[dict] = []  # Per-step execution log
     case_type = case.get("type", "clear_en")
@@ -52,11 +55,11 @@ async def grade_trace(result: CollectedResult, case: dict) -> dict:
     l0c = grade_constraints(result, constraints)
     l1_score, l1_breakdown = compute_l1_score(result, case_type)
 
-    # L2 legacy (if enabled)
+    # L2 legacy (generic dimensions; off unless LEGACY_L2_ENABLED)
     l2 = None
     try:
-        from config import JUDGE_ENABLED
-        if JUDGE_ENABLED:
+        from config import JUDGE_ENABLED, LEGACY_L2_ENABLED
+        if JUDGE_ENABLED and LEGACY_L2_ENABLED:
             from graders.l2_judge import grade_l2 as _grade_l2
             l2 = await _grade_l2(result, case, {"structure": l0}, l0c, l1_breakdown)
     except Exception:
@@ -68,13 +71,16 @@ async def grade_trace(result: CollectedResult, case: dict) -> dict:
     # ── Negative cases: special scoring ──
     if case_type in NEGATIVE_TYPES:
         from graders.scoring import compute_final_score
-        final, is_pass = compute_final_score(l0, l1_score, l2, case_type)
+        final, composite_pass = compute_final_score(l0, l1_score, l2, case_type)
+        # Negative cases are checked by their own L0 rules: brief answer, few searches, no error
+        checks = {f"l0.{name}": bool(ok) for name, ok in l0.items()}
         return {
             "l0": {"structure": l0, "constraints": l0c},
             "l1": {"score": l1_score, "breakdown": l1_breakdown},
             "l2": l2,
             "final_score": final,
-            "final_pass": is_pass,
+            "final_pass": decide_pass(checks, composite_pass, PASS_RULE),
+            "checks": checks,
             "composite_scores": {},
             "failure_funnel": {},
             "error_types": [],
@@ -202,11 +208,15 @@ async def grade_trace(result: CollectedResult, case: dict) -> dict:
             })
 
     # ── Composite Score ──
-    composite_score, is_pass = compute_composite_score(grader_results, case_type)
+    composite_score, composite_pass = compute_composite_score(grader_results, case_type)
 
     # Override: gate failure forces fail
     if not gate_passed:
-        is_pass = False
+        composite_pass = False
+
+    # ── Pass decision: every check (pass_all) or the weighted score (composite) ──
+    checks = build_checks(gate_results, grader_results)
+    is_pass = decide_pass(checks, composite_pass, PASS_RULE)
 
     grading_log.append({
         "step": "gate", "category": "system",
@@ -214,8 +224,13 @@ async def grade_trace(result: CollectedResult, case: dict) -> dict:
     })
     grading_log.append({
         "step": "composite", "category": "system",
-        "score": composite_score, "is_pass": is_pass,
+        "score": composite_score, "is_pass": composite_pass,
         "n_graders": len(grader_results),
+    })
+    grading_log.append({
+        "step": "pass", "category": "system",
+        "rule": PASS_RULE, "is_pass": is_pass,
+        "failed_checks": sorted(name for name, ok in checks.items() if not ok),
     })
 
     # ── Failure Funnel ──
@@ -261,6 +276,7 @@ async def grade_trace(result: CollectedResult, case: dict) -> dict:
         "l2": l2,
         "final_score": final_score,
         "final_pass": is_pass,
+        "checks": checks,
         "composite_scores": composite_dict,
         "failure_funnel": {
             "stage": funnel.stage,
