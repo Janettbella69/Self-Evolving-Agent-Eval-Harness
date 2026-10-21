@@ -168,8 +168,8 @@ python scripts/export_langfuse.py --days 30 --limit 200 --tag my-agent --grade
 | `PRODUCT_API_URL` | 被测 Agent 的 API 地址 | `http://localhost:8001` |
 | `EVAL_API_KEY` | 与被测系统的共享密钥 | 空 |
 | `ANTHROPIC_API_KEY` | L2 judge 调用所需 | 空 |
-| `GRADING_MODEL` | judge 模型（先强后省，以和人工标注对得上为准）。2026-10-21 起默认 GPT-6 Luna：OpenRouter 上每百万 token 输入 $0.10、输出 $0.50，旧默认 `openai/gpt-5.4` 是 $2.50 / $15；还没在我们自己的人工标注上验证过 | `openai/gpt-6-luna`（需经网关） |
-| `ANTHROPIC_BASE_URL` | Anthropic 兼容网关（如 OpenRouter）。默认 judge 模型只能经网关访问；用纯 Anthropic key 时把 `GRADING_MODEL` 改成 Claude 模型 | 空 |
+| `GRADING_MODEL` | judge 模型（先强后省，以和人工标注对得上为准）。2026-10-21 起默认 Claude Haiku 5.5：judge 跑在 Claude Agent SDK 上，Claude 模型不用网关转换；每百万 token 输入 $0.10、输出 $0.50（单次输入超过 10 万 token 时 $0.50 / $2.50），旧默认 `openai/gpt-5.4` 是 $2.50 / $15；还没在我们自己的人工标注上验证过。用纯 Anthropic key 时填 `claude-haiku-5-5` | `anthropic/claude-haiku-5.5`（OpenRouter 写法） |
+| `ANTHROPIC_BASE_URL` | Anthropic 兼容网关（如 OpenRouter）。默认 judge 模型名是 OpenRouter 写法；用纯 Anthropic key、不经网关时把 `GRADING_MODEL` 改成 `claude-haiku-5-5` | 空 |
 | `ANTHROPIC_AUTH_TOKEN` | 网关要求时替代 `ANTHROPIC_API_KEY` | 空 |
 | `GRADING_FALLBACK_MODEL` | judge 主模型失败时的备用模型 | `minimax/minimax-m2.7-highspeed` |
 | `USER_SIMULATOR_MODEL` | 替用户回答被测 Agent 追问的模型 | `minimax/minimax-m2.7` |
@@ -232,7 +232,7 @@ python cli.py summary --experiment-id 1
 python cli.py regression --latest --threshold 5
 ```
 
-依赖边界：`run` 需要 `PRODUCT_API_URL` 指向一个真实运行的被测 Agent；L2 judge 打分需要 `ANTHROPIC_API_KEY`，默认 judge 模型还要经网关访问（见环境变量表）。两者都没有时，import / list / UI 浏览 / 人工标注仍然全部可用。被测系统的隔离实例部署示例见 `examples/azora/docker-compose.eval.yml`。
+依赖边界：`run` 需要 `PRODUCT_API_URL` 指向一个真实运行的被测 Agent；L2 judge 打分需要 `ANTHROPIC_API_KEY`（经网关时按网关要求填），默认 judge 模型名是 OpenRouter 写法，不经网关要改成 Anthropic 写法（见环境变量表）。两者都没有时，import / list / UI 浏览 / 人工标注仍然全部可用。被测系统的隔离实例部署示例见 `examples/azora/docker-compose.eval.yml`。
 
 ## 目录结构
 

@@ -29,13 +29,14 @@ ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "")
 # then try cheaper ones and keep whichever still agrees with human labels
 # (validate_evaluator.py). Per the evals FAQ, the product's own model is usually fine:
 # what matters is agreement with humans, not relative strength.
-# Default since 2026-10-21: openai/gpt-6-luna, $0.10 in / $0.50 out per M tokens on
-# OpenRouter vs $2.50 / $15 for the previous openai/gpt-5.4. In Hamel Husain's
-# 2026-10-20 decision-model test, OpenAI Decisions (backed by GPT-6 Luna) had the best
-# F1 at flagging failed agent traces. Not yet validated on our own human labels.
-# Default assumes an OpenRouter-style gateway (see ANTHROPIC_BASE_URL above);
-# with a plain Anthropic key, set GRADING_MODEL to a Claude model.
-GRADING_MODEL = os.getenv("GRADING_MODEL", "openai/gpt-6-luna")
+# Default since 2026-10-21: Claude Haiku 5.5. The judge runs on the Claude Agent SDK
+# (Claude Code), which speaks Anthropic's API natively, so a Claude model needs no
+# translation by the gateway. $0.10 in / $0.50 out per M tokens for prompts up to 100K
+# tokens ($0.50 / $2.50 above that; judge prompts stay well below), vs $2.50 / $15 for
+# the previous openai/gpt-5.4. Not yet validated on our own human labels.
+# "anthropic/claude-haiku-5.5" is the OpenRouter id (see ANTHROPIC_BASE_URL above);
+# with a plain Anthropic key, set GRADING_MODEL=claude-haiku-5-5.
+GRADING_MODEL = os.getenv("GRADING_MODEL", "anthropic/claude-haiku-5.5")
 
 # Fallback judge model when GRADING_MODEL fails (Agent SDK fallback_model).
 GRADING_FALLBACK_MODEL = os.getenv("GRADING_FALLBACK_MODEL", "minimax/minimax-m2.7-highspeed")
