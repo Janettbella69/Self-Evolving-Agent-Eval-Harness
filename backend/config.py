@@ -22,16 +22,20 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 # Optional Anthropic-compatible gateway (e.g. OpenRouter). The Agent SDK and the
 # anthropic client read ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN from the environment;
-# non-Anthropic model ids such as "openai/gpt-5.4" only resolve through such a gateway.
+# non-Anthropic model ids such as "openai/gpt-6-luna" only resolve through such a gateway.
 ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "")
 
 # L2 grading model. Start with a capable model so the judge prompt is easy to get right,
 # then try cheaper ones and keep whichever still agrees with human labels
 # (validate_evaluator.py). Per the evals FAQ, the product's own model is usually fine:
 # what matters is agreement with humans, not relative strength.
+# Default since 2026-10-21: openai/gpt-6-luna, $0.10 in / $0.50 out per M tokens on
+# OpenRouter vs $2.50 / $15 for the previous openai/gpt-5.4. In Hamel Husain's
+# 2026-10-20 decision-model test, OpenAI Decisions (backed by GPT-6 Luna) had the best
+# F1 at flagging failed agent traces. Not yet validated on our own human labels.
 # Default assumes an OpenRouter-style gateway (see ANTHROPIC_BASE_URL above);
 # with a plain Anthropic key, set GRADING_MODEL to a Claude model.
-GRADING_MODEL = os.getenv("GRADING_MODEL", "openai/gpt-5.4")
+GRADING_MODEL = os.getenv("GRADING_MODEL", "openai/gpt-6-luna")
 
 # Fallback judge model when GRADING_MODEL fails (Agent SDK fallback_model).
 GRADING_FALLBACK_MODEL = os.getenv("GRADING_FALLBACK_MODEL", "minimax/minimax-m2.7-highspeed")

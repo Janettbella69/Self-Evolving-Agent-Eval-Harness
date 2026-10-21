@@ -168,7 +168,7 @@ python scripts/export_langfuse.py --days 30 --limit 200 --tag my-agent --grade
 | `PRODUCT_API_URL` | 被测 Agent 的 API 地址 | `http://localhost:8001` |
 | `EVAL_API_KEY` | 与被测系统的共享密钥 | 空 |
 | `ANTHROPIC_API_KEY` | L2 judge 调用所需 | 空 |
-| `GRADING_MODEL` | judge 模型（先强后省，以和人工标注对得上为准） | `openai/gpt-5.4`（需经网关） |
+| `GRADING_MODEL` | judge 模型（先强后省，以和人工标注对得上为准）。2026-10-21 起默认 GPT-6 Luna：OpenRouter 上每百万 token 输入 $0.10、输出 $0.50，旧默认 `openai/gpt-5.4` 是 $2.50 / $15；还没在我们自己的人工标注上验证过 | `openai/gpt-6-luna`（需经网关） |
 | `ANTHROPIC_BASE_URL` | Anthropic 兼容网关（如 OpenRouter）。默认 judge 模型只能经网关访问；用纯 Anthropic key 时把 `GRADING_MODEL` 改成 Claude 模型 | 空 |
 | `ANTHROPIC_AUTH_TOKEN` | 网关要求时替代 `ANTHROPIC_API_KEY` | 空 |
 | `GRADING_FALLBACK_MODEL` | judge 主模型失败时的备用模型 | `minimax/minimax-m2.7-highspeed` |
