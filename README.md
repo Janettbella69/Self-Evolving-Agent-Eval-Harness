@@ -50,25 +50,39 @@ trace 采集 → 错误分析(开放编码→taxonomy) → 人工标注(gold) �
 |----|------|---------|------|
 | L0 | `l0_structure.py` / `l0_constraints.py` | 输出结构完整性、硬约束（预算、必备条件）是否满足 | 免费，纯规则 |
 | L1 | `l1_metrics.py` | 可计算指标（数量、覆盖度、来源多样性等） | 免费，纯代码 |
-| L2 | `l2_judge.py` / `llm_graders.py` | 需要判断力的维度：groundedness、actionability、rubric 合规、trap 检测 | LLM 调用 |
+| L2 | `llm_graders.py`（`l2_judge.py` 是旧版 5 个通用维度的评委，默认不跑，见 `LEGACY_L2_ENABLED`） | 需要判断力的维度：groundedness、actionability、rubric 合规、trap 检测 | LLM 调用 |
 
-配套：`error_taxonomy.py`（失效模式分类）、`composite.py`（加权合成总分）、`scoring.py`（阈值判定）。
+配套：`error_taxonomy.py`（失效模式分类）、`composite.py`（加权合成总分）、`scoring.py`（门禁、二元检查和通过判定）。
+
+### 怎么算通过
+
+每条 trace 记一组二元检查（`traces.checks`）。默认 `PASS_RULE=pass_all`：**全部检查都过才算通过**。做法对齐 Hamel 和 Shreya Shankar 的 [evals FAQ](https://hamel.dev/blog/posts/evals-faq/)：每个 eval 只出 Pass/Fail，用「全过率」汇总，再下钻看每项检查的通过率。
+
+- 正例和 trap case：门禁检查（`gate.*`，判据在 `graders/types.py`），加上每个跑过的 LLM 评委自己判的 Pass/Fail
+- 负例 case：L0 的三条检查（`l0.kept_brief` / `l0.few_searches` / `l0.no_error`）
+- 代码 grader 只出 0–100 的启发式分数，没有自己的 Pass/Fail，只作诊断，照旧计入加权分；没跑的评委（缺 golden_data 或出错）不产生检查
+
+加权分（`final_score`）照常计算和保存，用来看趋势。`PASS_RULE=composite` 切回旧规则：加权分 ≥ `PASS_THRESHOLD` 且门禁通过。`cli.py summary` 会按通过率从低到高列出每项检查，最拖后腿的排在最前。judge 关闭时只剩门禁检查，通过率会明显偏高，这时更该看加权分和每项检查的通过率。
 
 ## Judge 校准闭环（核心差异点）
 
 **未校准的 judge 不可信任。** 平台把校准做成了可重复的工作流：
 
 1. `scripts/sample_for_annotation.py` — 分层采样待标注 trace
-2. `ANNOTATION_GUIDE.md` + 标注前端 — 人工标注 gold labels（Pass/Fail 判据显式成文，标注人是人不是模型）
-3. `scripts/validate_evaluator.py` — judge 判定 vs 人工 gold，输出 TPR/TNR 对齐报告
+2. `ANNOTATION_GUIDE.md` + 标注前端 — 人工标注 gold labels（Pass/Fail 判据显式成文，标注人是人不是模型；盲标，见下）
+3. `scripts/validate_evaluator.py` — judge 判定 vs 人工 gold，输出 TPR/TNR 对齐报告。默认只报 dev，test 留到 prompt 定稿后用 `--split test` 跑一次
 4. `scripts/extract_few_shots.py` — 从 train 集各取一条人判 Pass、一条人判 Fail 的样本写成 few-shot（`calibration/few_shots/`）。当前优先选 judge 与人一致的样本，从分歧样本提炼在路线图里
-5. `scripts/calibration_loop.py` — 注入 few-shots 重跑，迭代直到对齐达标
+5. `scripts/calibration_loop.py` — 注入 few-shots 重跑，迭代直到对齐达标。除了整体，还按评委分别算 TPR/TNR（拿评委的判定比人对同一评委的标注），某一类标注不足 30 条会提示
+
+TPR/TNR 以「有错」为正类，和 evals FAQ 一致：TPR = 人判 Fail 的 trace 里，评委也判 Fail 的比例（抓错率）；TNR = 人判 Pass 的里评委也判 Pass 的比例（反过来就是误报率）。2026-10-21 之前写进 `calibration_log.jsonl` 和 `grader_validations` 表的记录以 Pass 为正类，TPR 和 TNR 是对调的，`calibration_loop.py --history` 显示时会自动换回来。
 
 工程保证：
 
-- **Judge 必须强于被测模型**（`config.py`：GRADING_MODEL 默认取更强模型——弱模型抓不住强模型级别的错误，同级模型会共享盲区）
+- **train/dev/test 按 case 切分**：同一个 case 的多次 trial 只会落在一份数据里，few-shot 样本不会和 dev/test 同 case。用旧版（按 trace 切的）`splits.json` 跑时会提示重新切分
+- **盲标**：标注页在人判 Pass/Fail 之前不显示机器的分数、判定、打分日志和 AI 分析（页头的眼睛图标可以手动打开）；校准面板里每个评委的 LLM 分，也要等人给这个评委打完分才显示。`annotate_batch.py` 同样在人判完之后才打印机器结果
+- **评委模型先强后省**（`GRADING_MODEL`）：先用强模型把 judge prompt 调通，再试便宜的模型，留下和人工标注仍然对得上的那个。按 evals FAQ，用和被测 Agent 同一个模型通常也可以，要看的是和人工对不对得上，而不是谁更强
 - **Judge prompt 版本哈希**（`JUDGE_PROMPT_VERSION`）——每条 trace 记录打分时的 judge 版本，用来回答"是 Agent 变了，还是尺子变了"。当前哈希只覆盖 `llm_graders.py` 和 `eval_agent.py` 两个文件，few-shot 文件、数据库里的 prompt 和 judge 模型名尚未纳入（见已知问题）
-- **通过阈值应由人工标注校准得出**（`PASS_THRESHOLD`），并随标注量增长定期重校准。目前仍是手工填入的环境变量；judge 关闭时总分只由代码 grader 构成，要单独校准
+- **`PASS_THRESHOLD` 只在 `PASS_RULE=composite` 时决定通过**，应由人工标注校准得出，并随标注量增长定期重校准。目前仍是手工填入的环境变量
 
 ## 使用指南
 
@@ -103,7 +117,7 @@ trace 采集 → 错误分析(开放编码→taxonomy) → 人工标注(gold) �
 ```bash
 python cli.py run --dataset "My Agent Baseline V1" --tag v1.0 --trials 2 --concurrency 2
 python cli.py list                                # 历史实验
-python cli.py summary --experiment-id 1           # 汇总：分数、通过情况、各 grader 表现
+python cli.py summary --experiment-id 1           # 汇总：分数、通过情况、每项检查通过率、各 grader 表现
 python cli.py regression --latest --threshold 5   # 最近两次对比，掉分超阈值 → exit 1
 ```
 
@@ -117,13 +131,13 @@ python cli.py regression --latest --threshold 5   # 最近两次对比，掉分�
 python scripts/sample_for_annotation.py --experiment-id 1 --count 50   # 采样（--seed 可复现）
 ```
 
-然后在 `frontend/` 的 Trace 页（`/traces/:id`）逐条判 Pass/Fail、打开放编码（open codes）。判据写在 `ANNOTATION_GUIDE.md`——换领域先重写它。标注落库到 `human_pass` / `human_scores` 字段。
+然后在 `frontend/` 的 Trace 页（`/traces/:id`）逐条判 Pass/Fail、打开放编码（open codes）。判之前页面不显示机器结果（盲标）。要单独校准某个评委，在右侧 Human Calibration 面板给它打分（≥70 算 Pass）。判据写在 `ANNOTATION_GUIDE.md`——换领域先重写它。标注落库到 `human_pass` / `human_scores` 字段。
 
 ### 4. 校准 judge（拿到可信的 TPR/TNR）
 
 ```bash
-python scripts/calibration_loop.py --create-splits        # train/dev/test 划分（一次性）
-python scripts/validate_evaluator.py --per-grader         # judge vs 人工 gold 对齐报告
+python scripts/calibration_loop.py --create-splits        # train/dev/test 按 case 划分（一次性）
+python scripts/validate_evaluator.py --per-grader         # judge vs 人工 gold 对齐报告（默认只看 dev）
 python scripts/extract_few_shots.py                       # 从 train 集提炼 few-shots
 python scripts/calibration_loop.py --run-dev --notes "v2 few-shots"   # dev 集重打分
 # …迭代到对齐达标后…
@@ -154,14 +168,16 @@ python scripts/export_langfuse.py --days 30 --limit 200 --tag my-agent --grade
 | `PRODUCT_API_URL` | 被测 Agent 的 API 地址 | `http://localhost:8001` |
 | `EVAL_API_KEY` | 与被测系统的共享密钥 | 空 |
 | `ANTHROPIC_API_KEY` | L2 judge 调用所需 | 空 |
-| `GRADING_MODEL` | judge 模型（必须强于被测模型） | `openai/gpt-5.4`（需经网关） |
+| `GRADING_MODEL` | judge 模型（先强后省，以和人工标注对得上为准） | `openai/gpt-5.4`（需经网关） |
 | `ANTHROPIC_BASE_URL` | Anthropic 兼容网关（如 OpenRouter）。默认 judge 模型只能经网关访问；用纯 Anthropic key 时把 `GRADING_MODEL` 改成 Claude 模型 | 空 |
 | `ANTHROPIC_AUTH_TOKEN` | 网关要求时替代 `ANTHROPIC_API_KEY` | 空 |
 | `GRADING_FALLBACK_MODEL` | judge 主模型失败时的备用模型 | `minimax/minimax-m2.7-highspeed` |
 | `USER_SIMULATOR_MODEL` | 替用户回答被测 Agent 追问的模型 | `minimax/minimax-m2.7` |
 | `JUDGE_ENABLED` | 是否启用 L2 judge | 关 |
 | `JUDGE_PRESET` | judge 是否使用 Claude Code 全工具预设（更慢，可联网核实） | 关 |
-| `PASS_THRESHOLD` | 通过阈值（应由校准得出，勿拍脑袋；judge 关闭时需单独校准） | `60` |
+| `LEGACY_L2_ENABLED` | 是否额外跑旧版 L2（relevance、completeness 等 5 个通用维度，每条 trace 多一次评委调用） | 关 |
+| `PASS_RULE` | 通过规则：`pass_all` 全部检查都过；`composite` 加权分 ≥ `PASS_THRESHOLD` | `pass_all` |
+| `PASS_THRESHOLD` | 加权分通过线，只在 `PASS_RULE=composite` 时生效（应由校准得出，勿拍脑袋） | `60` |
 | `PRODUCT_CODE_PATH` | 被测 Agent 源码路径，preset judge 深检用（可选） | 空 |
 | `LANGFUSE_SECRET_KEY` / `LANGFUSE_PUBLIC_KEY` | 生产 trace 导入 | 空 |
 | `EVAL_DATASET` | `run_eval.sh` 使用的数据集名 | `Legacy Baseline V1` |
@@ -249,19 +265,19 @@ ANNOTATION_GUIDE.md  # 标注指南（AZORA 案例实例，可作为你的领域
 2. `regression --latest` 取全库最近两个完成的实验比平均分，不按数据集、case 子集或 judge 版本配对。
 3. `JUDGE_PROMPT_VERSION` 未覆盖 few-shot 文件、数据库中的 prompt 和 judge 模型名。
 4. `extract_few_shots.py` 优先选 judge 与人一致的样本，并沿用 judge 自己的 reasoning，对纠正分歧帮助有限。
-5. 自动化测试只覆盖 judge 打分工具的并发隔离和实验的 stop / 熔断，打分逻辑还没有测试。
+5. 自动化测试覆盖 judge 打分工具的并发隔离、实验的 stop / 熔断、校准数据切分和 TPR/TNR 口径、通过判定（pass_all / composite）；各个 grader 自己的打分逻辑还没有测试。
 
 ## 路线图：自进化的评测系统
 
 目标是让「尺子」「数据集」「阈值」三样东西随标注和线上数据自动演进，人只在关键门上把关：
 
-- **尺子自进化**：标注累积到阈值自动跑验证；TPR/TNR 不达标时从 FP/FN 样本生成 few-shot 候选和 prompt 修订提案，在 dev 集重打分，达标后才激活为新版本（`judge_prompts` 表已有版本号和激活位），test 集只在封板时跑一次。前提是先修已知问题 3，否则无法归因。
-- **数据集自进化**：线上失败 trace 自动转 case（`/traces/{id}/to_case` 已有），全员通过的 case 按饱和度检测退役（`/datasets/{id}/saturation` 已有），open codes 定期聚类产出新的失效分类。
-- **阈值自进化**：`PASS_THRESHOLD` 从标注分布计算，并按 judge 开关和权重配置分别校准。
-- **护栏**：激活新 prompt、退役 case 都保留人工批准；每条 trace 记录完整的尺子版本（prompt + few-shot + 模型）。
+- **尺子自进化**：标注累积到阈值自动跑验证；TPR/TNR 不达标时从漏判（人判 Fail、评委判 Pass）和误报的样本生成 few-shot 候选和 prompt 修订提案，在 dev 集重打分，达标后才激活为新版本（`judge_prompts` 表已有版本号和激活位），test 集只在封板时跑一次。前提是先修已知问题 3，否则无法归因。
+- **数据集自进化**：线上失败 trace 自动转 case（`/traces/{id}/to_case` 已有），全员通过的 case 按饱和度检测退役（`/datasets/{id}/saturation` 已有），open codes 定期聚类，提出新的失效分类候选。
+- **阈值自进化**：`PASS_THRESHOLD`（composite 规则）从标注分布计算，并按 judge 开关和权重配置分别校准。
+- **护栏**：激活新 prompt、退役 case、采用新的失效分类都保留人工批准（evals FAQ 明确说 LLM 归出来的分类必须人来确认）；每条 trace 记录完整的尺子版本（prompt + few-shot + 模型）。
 
 ## 方法论参考
 
-评测方法论对齐 [Hamel Husain 的 evals 体系](https://hamel.dev/blog/posts/evals/)：错误分析先行、人工 gold 为锚、judge 必须校准、指标服务于迭代而非汇报。
+评测方法论对齐 [Hamel Husain 的 evals 体系](https://hamel.dev/blog/posts/evals/) 和他与 Shreya Shankar 的 [evals FAQ](https://hamel.dev/blog/posts/evals-faq/)：错误分析先行、人工 gold 为锚、judge 必须校准、每个 eval 只出 Pass/Fail、指标服务于迭代而非汇报。
 
 与 [openai/evals](https://github.com/openai/evals) 定位互补：它是**基准 registry + 模板化跑分**（YAML 注册 + JSONL 数据 + `oaieval` CLI），适合横向比较模型能力，其 model-graded judge 为 zero-shot、校准手段只有 meta-eval 一致率（简单 accuracy，无 TPR/TNR、无数据划分）；本平台是**单一 Agent 产品的迭代评测系统**——judge 校准做到 TPR/TNR + train/dev/test 划分 + few-shot 迭代，并自带标注 UI、回归门禁与生产 trace 回流。
