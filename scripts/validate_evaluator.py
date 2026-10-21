@@ -4,10 +4,16 @@
 Based on Hamel Husain's validate-evaluator skill:
 https://hamel.dev/blog/posts/evals-skills/
 
+Failure is the positive class (TPR = share of human-failed traces the judge
+fails too). Splits come from calibration/splits.json when it exists, otherwise
+they are made in memory by case, so no case lands in two splits. The default
+report covers dev only; the test split is held out for one final check.
+
 Usage:
     python scripts/validate_evaluator.py [--db backend/eval.db]
     python scripts/validate_evaluator.py --per-grader
     python scripts/validate_evaluator.py --experiment-id 5
+    python scripts/validate_evaluator.py --split test        # final check, prompts frozen
 """
 
 import argparse
@@ -18,6 +24,36 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT / "backend"))
+
+from graders.validation import (  # noqa: E402
+    MIN_LABELS_PER_CLASS,
+    VALIDATION_TARGET,
+    VALIDATION_TNR_THRESHOLD,
+    VALIDATION_TPR_THRESHOLD,
+    confusion_from_pairs,
+    group_stratified_split,
+    human_grader_passed,
+    judge_passed,
+    rogan_gladen_correction,
+)
+
+SPLITS_FILE = _REPO_ROOT / "calibration" / "splits.json"
+
+
+def _row_to_labeled(r) -> dict:
+    return {
+        "id": r["id"],
+        "case_key": r["case_key"],
+        "final_pass": bool(r["final_pass"]),
+        "human_pass": bool(r["human_pass"]),
+        "final_score": r["final_score"] or 0,
+        "composite_scores": json.loads(r["composite_scores"] or "{}"),
+        "human_scores": json.loads(r["human_scores"] or "{}"),
+        "case_type": r["case_type"] or "",
+    }
 
 
 def load_labeled_traces(db_path: str, experiment_id: int | None = None) -> list[dict]:
@@ -38,20 +74,7 @@ def load_labeled_traces(db_path: str, experiment_id: int | None = None) -> list[
 
     rows = conn.execute(sql, params).fetchall()
     conn.close()
-
-    traces = []
-    for r in rows:
-        traces.append({
-            "id": r["id"],
-            "case_key": r["case_key"],
-            "final_pass": bool(r["final_pass"]),
-            "human_pass": bool(r["human_pass"]),
-            "final_score": r["final_score"] or 0,
-            "composite_scores": json.loads(r["composite_scores"] or "{}"),
-            "human_scores": json.loads(r["human_scores"] or "{}"),
-            "case_type": r["case_type"] or "",
-        })
-    return traces
+    return [_row_to_labeled(r) for r in rows]
 
 
 def load_all_traces(db_path: str) -> list[dict]:
@@ -65,67 +88,13 @@ def load_all_traces(db_path: str) -> list[dict]:
     return [{"final_pass": bool(r["final_pass"])} for r in rows]
 
 
-def stratified_split(traces: list[dict], train_frac=0.15, dev_frac=0.45, seed=42):
-    """Split labeled data into train/dev/test, stratified by human_pass."""
-    rng = np.random.RandomState(seed)
-
-    pos = [t for t in traces if t["human_pass"]]
-    neg = [t for t in traces if not t["human_pass"]]
-
-    def _split(data):
-        idx = rng.permutation(len(data))
-        n_train = max(1, int(len(data) * train_frac))
-        n_dev = max(1, int(len(data) * dev_frac))
-        train = [data[i] for i in idx[:n_train]]
-        dev = [data[i] for i in idx[n_train:n_train + n_dev]]
-        test = [data[i] for i in idx[n_train + n_dev:]]
-        return train, dev, test
-
-    pos_train, pos_dev, pos_test = _split(pos)
-    neg_train, neg_dev, neg_test = _split(neg)
-
-    return (
-        pos_train + neg_train,
-        pos_dev + neg_dev,
-        pos_test + neg_test,
-    )
-
-
 def compute_metrics(traces: list[dict], auto_key="final_pass", human_key="human_pass"):
-    """Compute TPR, TNR, confusion matrix."""
-    tp = fp = tn = fn = 0
-    for t in traces:
-        human = t[human_key]
-        auto = t[auto_key]
-        if human and auto:
-            tp += 1
-        elif human and not auto:
-            fn += 1
-        elif not human and auto:
-            fp += 1
-        else:
-            tn += 1
-
-    tpr = tp / (tp + fn) if (tp + fn) > 0 else None
-    tnr = tn / (tn + fp) if (tn + fp) > 0 else None
-
-    return {
-        "tp": tp, "fp": fp, "tn": tn, "fn": fn,
-        "tpr": round(tpr, 3) if tpr is not None else None,
-        "tnr": round(tnr, 3) if tnr is not None else None,
-        "total": len(traces),
-        "human_pass_rate": round((tp + fn) / len(traces), 3) if traces else 0,
-        "auto_pass_rate": round((tp + fp) / len(traces), 3) if traces else 0,
-    }
-
-
-def rogan_gladen(p_obs: float, tpr: float, tnr: float) -> float | None:
-    """Rogan-Gladen bias correction for true pass rate."""
-    denom = tpr + tnr - 1
-    if abs(denom) < 1e-6:
-        return None  # Judge is no better than random
-    corrected = (p_obs + tnr - 1) / denom
-    return max(0.0, min(1.0, corrected))
+    """Compute TPR, TNR, confusion matrix (failure = positive)."""
+    m = confusion_from_pairs((t[auto_key], t[human_key]) for t in traces)
+    m["total"] = len(traces)
+    m["human_pass_rate"] = round(m["human_pass"] / len(traces), 3) if traces else 0
+    m["auto_pass_rate"] = round((m["tn"] + m["fn"]) / len(traces), 3) if traces else 0
+    return m
 
 
 def bootstrap_ci(traces: list[dict], p_obs: float, n_bootstrap=2000, seed=42):
@@ -138,21 +107,12 @@ def bootstrap_ci(traces: list[dict], p_obs: float, n_bootstrap=2000, seed=42):
     estimates = []
     for _ in range(n_bootstrap):
         idx = rng.choice(n, size=n, replace=True)
-        sample = [traces[i] for i in idx]
-
-        tp = sum(1 for t in sample if t["human_pass"] and t["final_pass"])
-        fn = sum(1 for t in sample if t["human_pass"] and not t["final_pass"])
-        tn = sum(1 for t in sample if not t["human_pass"] and not t["final_pass"])
-        fp = sum(1 for t in sample if not t["human_pass"] and t["final_pass"])
-
-        tpr_b = tp / (tp + fn) if (tp + fn) > 0 else 0
-        tnr_b = tn / (tn + fp) if (tn + fp) > 0 else 0
-        denom = tpr_b + tnr_b - 1
-
-        if abs(denom) < 1e-6:
+        m = confusion_from_pairs((traces[i]["final_pass"], traces[i]["human_pass"]) for i in idx)
+        if m["tpr"] is None or m["tnr"] is None:
             continue
-        theta = (p_obs + tnr_b - 1) / denom
-        estimates.append(np.clip(theta, 0, 1))
+        corrected = rogan_gladen_correction(p_obs, m["tpr"], m["tnr"])
+        if corrected is not None:
+            estimates.append(corrected)
 
     if len(estimates) < 100:
         return None, None
@@ -160,60 +120,28 @@ def bootstrap_ci(traces: list[dict], p_obs: float, n_bootstrap=2000, seed=42):
     return float(np.percentile(estimates, 2.5)), float(np.percentile(estimates, 97.5))
 
 
-def compute_per_grader_alignment(traces: list[dict], threshold=70.0):
-    """Compute TPR/TNR per grader dimension.
+def compute_per_grader_alignment(traces: list[dict]):
+    """Compute TPR/TNR per LLM judge against the human label for that grader.
 
-    For each grader, binarize its score (>= threshold → PASS) and compare
-    against human_pass to get per-grader TPR/TNR.
+    The judge's verdict (or score >= 70 for old entries) is compared with
+    human_scores[grader] (>= 70 = Pass). Comparing a single judge with the
+    overall human verdict would blame it for failures it isn't meant to catch.
     """
-    grader_names = set()
+    pairs: dict[str, list[tuple[bool, bool]]] = defaultdict(list)
     for t in traces:
-        if t["composite_scores"]:
-            grader_names.update(t["composite_scores"].keys())
-
-    results = {}
-    for grader in sorted(grader_names):
-        tp = fp = tn = fn = 0
-        for t in traces:
-            scores = t["composite_scores"]
-            if grader not in scores:
+        for grader, entry in t["composite_scores"].items():
+            if not isinstance(entry, dict) or entry.get("category") != "llm":
                 continue
-            grader_data = scores[grader]
-            if not isinstance(grader_data, dict):
-                continue
-
-            grader_pass = grader_data.get("score", 0) >= threshold
-            human = t["human_pass"]
-
-            if human and grader_pass:
-                tp += 1
-            elif human and not grader_pass:
-                fn += 1
-            elif not human and grader_pass:
-                fp += 1
-            else:
-                tn += 1
-
-        total = tp + fp + tn + fn
-        if total == 0:
-            continue
-
-        tpr = tp / (tp + fn) if (tp + fn) > 0 else None
-        tnr = tn / (tn + fp) if (tn + fp) > 0 else None
-
-        results[grader] = {
-            "tp": tp, "fp": fp, "tn": tn, "fn": fn,
-            "tpr": round(tpr, 3) if tpr is not None else None,
-            "tnr": round(tnr, 3) if tnr is not None else None,
-            "total": total,
-        }
-
-    return results
+            judge = judge_passed(entry)
+            label = human_grader_passed(t["human_scores"], grader)
+            if judge is not None and label is not None:
+                pairs[grader].append((judge, label))
+    return {grader: confusion_from_pairs(p) for grader, p in sorted(pairs.items())}
 
 
 def print_report(
-    train, dev, test, dev_metrics, test_metrics,
-    all_traces, per_grader, corrected_rate, ci_lower, ci_upper,
+    splits: dict, eval_name: str, metrics: dict,
+    all_traces, per_grader, corrected_rate, ci_lower, ci_upper, per_grader_requested: bool,
 ):
     """Print structured validation report."""
     print("=" * 60)
@@ -222,27 +150,24 @@ def print_report(
     print("=" * 60)
 
     # Data splits
-    print(f"\n## Data Splits")
-    print(f"  Train: {len(train):>4} ({sum(1 for t in train if t['human_pass'])} Pass, {sum(1 for t in train if not t['human_pass'])} Fail)")
-    print(f"  Dev:   {len(dev):>4} ({sum(1 for t in dev if t['human_pass'])} Pass, {sum(1 for t in dev if not t['human_pass'])} Fail)")
-    print(f"  Test:  {len(test):>4} ({sum(1 for t in test if t['human_pass'])} Pass, {sum(1 for t in test if not t['human_pass'])} Fail)")
+    print(f"\n## Data Splits (by case)")
+    for name, part in splits.items():
+        p = sum(1 for t in part if t["human_pass"])
+        cases = len({t["case_key"] for t in part})
+        print(f"  {name + ':':<6} {len(part):>4} traces, {cases:>3} cases ({p} Pass, {len(part) - p} Fail)")
 
-    # Dev metrics
-    print(f"\n## Dev Set Alignment")
-    _print_confusion(dev_metrics)
-
-    # Test metrics
-    print(f"\n## Test Set Alignment (FINAL)")
-    _print_confusion(test_metrics)
+    print(f"\n## {eval_name.capitalize()} Set Alignment")
+    _print_confusion(metrics)
+    if eval_name == "dev":
+        print("  Test split held out — run with --split test once prompts are frozen.")
 
     # Targets
     print(f"\n## Target Check")
-    tpr = test_metrics["tpr"]
-    tnr = test_metrics["tnr"]
-    tpr_ok = "✅" if tpr and tpr >= 0.9 else "❌" if tpr and tpr >= 0.8 else "🔴"
-    tnr_ok = "✅" if tnr and tnr >= 0.9 else "❌" if tnr and tnr >= 0.8 else "🔴"
-    print(f"  TPR: {tpr:.3f} {tpr_ok} (target: >0.90, min: >0.80)" if tpr else "  TPR: N/A")
-    print(f"  TNR: {tnr:.3f} {tnr_ok} (target: >0.90, min: >0.80)" if tnr else "  TNR: N/A")
+    tpr = metrics["tpr"]
+    tnr = metrics["tnr"]
+    goal = f"(target: ≥{VALIDATION_TARGET:.2f}, min: ≥{VALIDATION_TPR_THRESHOLD:.2f})"
+    print(f"  TPR: {tpr:.3f} {_mark(tpr, VALIDATION_TPR_THRESHOLD)} {goal}" if tpr is not None else "  TPR: N/A")
+    print(f"  TNR: {tnr:.3f} {_mark(tnr, VALIDATION_TNR_THRESHOLD)} {goal}" if tnr is not None else "  TNR: N/A")
 
     # Bias correction
     if corrected_rate is not None:
@@ -259,46 +184,63 @@ def print_report(
             print(f"  95% CI: insufficient data for bootstrap")
 
     # Per-grader
-    if per_grader:
-        print(f"\n## Per-Grader Alignment (threshold=70)")
-        print(f"  {'Grader':<25} {'TPR':>6} {'TNR':>6} {'TP':>4} {'FP':>4} {'TN':>4} {'FN':>4}")
-        print(f"  {'-'*25} {'-'*6} {'-'*6} {'-'*4} {'-'*4} {'-'*4} {'-'*4}")
-        for name, m in per_grader.items():
-            tpr_s = f"{m['tpr']:.3f}" if m['tpr'] is not None else "N/A"
-            tnr_s = f"{m['tnr']:.3f}" if m['tnr'] is not None else "N/A"
-            print(f"  {name:<25} {tpr_s:>6} {tnr_s:>6} {m['tp']:>4} {m['fp']:>4} {m['tn']:>4} {m['fn']:>4}")
+    if per_grader_requested:
+        print(f"\n## Per-Judge Alignment (judge verdict vs human label for the same grader)")
+        if not per_grader:
+            print("  No per-grader human labels. Label graders in the trace page's Scores tab")
+            print("  or with annotate_batch.py, then re-run.")
+        else:
+            print(f"  {'Grader':<25} {'TPR':>6} {'TNR':>6} {'TP':>4} {'FP':>4} {'TN':>4} {'FN':>4}  Pass/Fail labels")
+            print(f"  {'-'*25} {'-'*6} {'-'*6} {'-'*4} {'-'*4} {'-'*4} {'-'*4}  {'-'*16}")
+            for name, m in per_grader.items():
+                tpr_s = f"{m['tpr']:.3f}" if m['tpr'] is not None else "N/A"
+                tnr_s = f"{m['tnr']:.3f}" if m['tnr'] is not None else "N/A"
+                few = "  ⚠ few" if min(m["human_pass"], m["human_fail"]) < MIN_LABELS_PER_CLASS else ""
+                print(f"  {name:<25} {tpr_s:>6} {tnr_s:>6} {m['tp']:>4} {m['fp']:>4} {m['tn']:>4} {m['fn']:>4}"
+                      f"  {m['human_pass']}/{m['human_fail']}{few}")
 
     # Recommendations
     print(f"\n## Recommendations")
-    labeled = len(train) + len(dev) + len(test)
+    labeled = sum(len(part) for part in splits.values())
     if labeled < 50:
         print(f"  ⚠ Only {labeled} labeled traces — need ~100 for reliable calibration")
         print(f"    Collect more via: POST /api/traces/{{id}}/annotate-pass")
-    if tpr and tpr < 0.8:
-        print(f"  ⚠ TPR too low ({tpr:.3f}) — judge is too strict, missing real passes")
-        print(f"    → Strengthen PASS definitions in grader prompts")
-    if tnr and tnr < 0.8:
-        print(f"  ⚠ TNR too low ({tnr:.3f}) — judge is too lenient, missing real fails")
-        print(f"    → Strengthen FAIL definitions and add edge-case examples")
-    if labeled >= 50 and tpr and tnr and tpr >= 0.9 and tnr >= 0.9:
-        print(f"  ✅ Judge meets alignment targets! Safe to use for automated eval.")
+    if min(metrics["human_pass"], metrics["human_fail"]) < MIN_LABELS_PER_CLASS:
+        print(f"  ⚠ {eval_name} has {metrics['human_pass']} Pass / {metrics['human_fail']} Fail labels — "
+              f"aim for {MIN_LABELS_PER_CLASS}-50 of each")
+    if tpr is not None and tpr < VALIDATION_TPR_THRESHOLD:
+        print(f"  ⚠ TPR too low ({tpr:.3f}) — judge misses real failures (too lenient)")
+        print(f"    → Sharpen FAIL definitions and add failing edge-case examples")
+    if tnr is not None and tnr < VALIDATION_TNR_THRESHOLD:
+        print(f"  ⚠ TNR too low ({tnr:.3f}) — judge fails good outputs (too strict)")
+        print(f"    → Clarify PASS definitions and add passing examples")
+    if labeled >= 50 and tpr and tnr and tpr >= VALIDATION_TARGET and tnr >= VALIDATION_TARGET:
+        if eval_name == "test":
+            print(f"  ✅ Judge meets alignment targets on the held-out test split.")
+        else:
+            print(f"  ✅ Judge meets alignment targets on {eval_name}. Confirm once with --split test.")
+
+
+def _mark(rate: float | None, minimum: float) -> str:
+    if rate is None:
+        return ""
+    return "✅" if rate >= VALIDATION_TARGET else "❌" if rate >= minimum else "🔴"
 
 
 def _print_confusion(m):
     print(f"  Confusion Matrix:")
     print(f"                  Judge PASS  Judge FAIL")
-    print(f"    Human PASS    {m['tp']:>6}      {m['fn']:>6}")
-    print(f"    Human FAIL    {m['fp']:>6}      {m['tn']:>6}")
-    print(f"  TPR (sensitivity): {m['tpr']:.3f}" if m['tpr'] is not None else "  TPR: N/A")
-    print(f"  TNR (specificity): {m['tnr']:.3f}" if m['tnr'] is not None else "  TNR: N/A")
+    print(f"    Human PASS    {m['tn']:>6}      {m['fp']:>6}")
+    print(f"    Human FAIL    {m['fn']:>6}      {m['tp']:>6}")
+    print(f"  TPR (failures caught): {m['tpr']:.3f}" if m['tpr'] is not None else "  TPR: N/A")
+    print(f"  TNR (passes kept):     {m['tnr']:.3f}" if m['tnr'] is not None else "  TNR: N/A")
 
 
 def load_split_traces(db_path: str, split_name: str) -> list[dict]:
     """Load traces from a specific split (using calibration/splits.json)."""
-    splits_file = Path(__file__).parent.parent / "calibration" / "splits.json"
-    if not splits_file.exists():
+    if not SPLITS_FILE.exists():
         return []
-    splits = json.loads(splits_file.read_text())
+    splits = json.loads(SPLITS_FILE.read_text())
     trace_ids = splits.get(split_name, [])
     if not trace_ids:
         return []
@@ -314,14 +256,7 @@ def load_split_traces(db_path: str, split_name: str) -> list[dict]:
     """, trace_ids).fetchall()
     conn.close()
 
-    return [{
-        "id": r["id"], "case_key": r["case_key"],
-        "final_pass": bool(r["final_pass"]), "human_pass": bool(r["human_pass"]),
-        "final_score": r["final_score"] or 0,
-        "composite_scores": json.loads(r["composite_scores"] or "{}"),
-        "human_scores": json.loads(r["human_scores"] or "{}"),
-        "case_type": r["case_type"] or "",
-    } for r in rows]
+    return [_row_to_labeled(r) for r in rows]
 
 
 def main():
@@ -329,8 +264,9 @@ def main():
     parser.add_argument("--db", default="backend/eval.db", help="Path to SQLite DB")
     parser.add_argument("--experiment-id", type=int, help="Filter to specific experiment")
     parser.add_argument("--per-grader", action="store_true", help="Show per-grader alignment")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for splits")
-    parser.add_argument("--split", choices=["dev", "test"], help="Use calibration split instead of auto-split")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for in-memory splits")
+    parser.add_argument("--split", choices=["dev", "test"],
+                        help="Report this split of calibration/splits.json (default: dev)")
     args = parser.parse_args()
 
     db_path = args.db
@@ -338,60 +274,55 @@ def main():
         print(f"Error: Database not found at {db_path}")
         sys.exit(1)
 
-    # If --split is specified, use calibration splits
     if args.split:
-        split_traces = load_split_traces(db_path, args.split)
-        if not split_traces:
+        # One split from calibration/splits.json
+        eval_traces = load_split_traces(db_path, args.split)
+        if not eval_traces:
             print(f"No annotated traces in {args.split} split. Run calibration_loop.py --create-splits first.")
             sys.exit(0)
-        print(f"Using {args.split} split: {len(split_traces)} traces")
-        train, dev, test = [], split_traces, split_traces
-        dev_metrics = compute_metrics(dev)
-        test_metrics = dev_metrics  # same data for single-split mode
-
-        all_traces = load_all_traces(db_path)
-        corrected_rate = ci_lower = ci_upper = None
-        if test_metrics["tpr"] and test_metrics["tnr"] and all_traces:
-            all_pass = sum(1 for t in all_traces if t["final_pass"])
-            p_obs = all_pass / len(all_traces) if all_traces else 0
-            corrected_rate = rogan_gladen(p_obs, test_metrics["tpr"], test_metrics["tnr"])
-            ci_lower, ci_upper = bootstrap_ci(split_traces, p_obs, seed=args.seed)
-
-        per_grader = compute_per_grader_alignment(split_traces) if args.per_grader else {}
-        print_report(train, dev, test, dev_metrics, test_metrics,
-                     all_traces, per_grader, corrected_rate, ci_lower, ci_upper)
-        return
-
-    # Default: load all labeled traces and auto-split
-    traces = load_labeled_traces(db_path, args.experiment_id)
-    if not traces:
-        print(f"No human-labeled traces found.")
-        print(f"Label traces via: python scripts/annotate_batch.py --experiment-id N")
-        sys.exit(0)
-
-    print(f"Found {len(traces)} human-labeled traces.")
-
-    if len(traces) < 20:
-        print(f"Warning: Only {len(traces)} labeled traces. Need ~100 for reliable results.")
-        print(f"Running with full dataset (no train/dev/test split).\n")
-        train, dev, test = [], traces, traces
+        print(f"Using {args.split} split: {len(eval_traces)} traces")
+        splits = {args.split: eval_traces}
+        eval_name = args.split
     else:
-        train, dev, test = stratified_split(traces, seed=args.seed)
+        traces = load_labeled_traces(db_path, args.experiment_id)
+        if not traces:
+            print(f"No human-labeled traces found.")
+            print(f"Label traces via: python scripts/annotate_batch.py --experiment-id N")
+            sys.exit(0)
 
-    dev_metrics = compute_metrics(dev)
-    test_metrics = compute_metrics(test)
+        print(f"Found {len(traces)} human-labeled traces.")
+
+        if len(traces) < 20:
+            print(f"Warning: Only {len(traces)} labeled traces. Need ~100 for reliable results.")
+            print(f"Running with full dataset (no train/dev/test split).\n")
+            splits = {"all": traces}
+            eval_traces, eval_name = traces, "all"
+        elif SPLITS_FILE.exists():
+            # Reuse the calibration splits so few-shot (train) traces never count as dev
+            ids = json.loads(SPLITS_FILE.read_text())
+            by_id = {t["id"]: t for t in traces}
+            splits = {name: [by_id[i] for i in ids.get(name, []) if i in by_id]
+                      for name in ("train", "dev", "test")}
+            print(f"Using splits from {SPLITS_FILE} (labeled traces outside it are ignored).")
+            eval_traces, eval_name = splits["dev"], "dev"
+        else:
+            train, dev, test = group_stratified_split(traces, seed=args.seed)
+            splits = {"train": train, "dev": dev, "test": test}
+            eval_traces, eval_name = dev, "dev"
+
+    metrics = compute_metrics(eval_traces)
 
     all_traces = load_all_traces(db_path)
     corrected_rate = ci_lower = ci_upper = None
-    if test_metrics["tpr"] and test_metrics["tnr"] and all_traces:
+    if metrics["tpr"] is not None and metrics["tnr"] is not None and all_traces:
         all_pass = sum(1 for t in all_traces if t["final_pass"])
         p_obs = all_pass / len(all_traces) if all_traces else 0
-        corrected_rate = rogan_gladen(p_obs, test_metrics["tpr"], test_metrics["tnr"])
-        ci_lower, ci_upper = bootstrap_ci(test, p_obs, seed=args.seed)
+        corrected_rate = rogan_gladen_correction(p_obs, metrics["tpr"], metrics["tnr"])
+        ci_lower, ci_upper = bootstrap_ci(eval_traces, p_obs, seed=args.seed)
 
-    per_grader = compute_per_grader_alignment(test) if args.per_grader else {}
-    print_report(train, dev, test, dev_metrics, test_metrics,
-                 all_traces, per_grader, corrected_rate, ci_lower, ci_upper)
+    per_grader = compute_per_grader_alignment(eval_traces) if args.per_grader else {}
+    print_report(splits, eval_name, metrics, all_traces, per_grader,
+                 corrected_rate, ci_lower, ci_upper, args.per_grader)
 
 
 if __name__ == "__main__":
