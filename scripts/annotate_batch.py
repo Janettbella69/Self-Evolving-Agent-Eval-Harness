@@ -69,13 +69,16 @@ def load_traces(db_path: str, experiment_id: int, unannotated_only: bool = False
 
 
 def present_trace(trace: dict, index: int, total: int):
-    """Print trace summary for human review."""
+    """Print trace summary for human review.
+
+    Machine results are left out so they can't anchor the human's verdict;
+    present_auto_result() prints them once the verdict is saved.
+    """
     print(f"\n{'='*70}")
     print(f"  Trace {trace['id']}  ({index+1}/{total})  [{trace['case_type']}]")
     print(f"{'='*70}")
     print(f"  Query: {trace['query'][:200]}")
     print(f"  Duration: {trace['duration_s']:.1f}s")
-    print(f"  Auto Score: {trace['final_score']:.1f}  Auto Pass: {trace['final_pass']}")
 
     if trace['error_events']:
         print(f"  Errors: {len(trace['error_events'])}")
@@ -90,6 +93,16 @@ def present_trace(trace: dict, index: int, total: int):
     if len(guide) > 800:
         print(f"  | ... ({len(guide) - 800} more chars)")
 
+    # Previous annotation
+    if trace['human_pass'] is not None:
+        prev = "PASS" if trace['human_pass'] else "FAIL"
+        print(f"\n  Previous annotation: {prev}")
+
+
+def present_auto_result(trace: dict):
+    """Print the automated verdict and grader scores, after the human has judged."""
+    print(f"  Auto Score: {trace['final_score']:.1f}  Auto Pass: {trace['final_pass']}")
+
     # Auto grader scores
     cs = trace['composite_scores']
     if cs:
@@ -98,11 +111,6 @@ def present_trace(trace: dict, index: int, total: int):
             if isinstance(data, dict):
                 score = data.get('score', '?')
                 print(f"    {name:25s}: {score}")
-
-    # Previous annotation
-    if trace['human_pass'] is not None:
-        prev = "PASS" if trace['human_pass'] else "FAIL"
-        print(f"\n  Previous annotation: {prev}")
 
 
 def collect_annotation(trace: dict) -> dict | None:
@@ -192,6 +200,7 @@ def main():
         annotated += 1
         verdict = "PASS" if result["human_pass"] else "FAIL"
         print(f"  → Saved: {verdict}")
+        present_auto_result(trace)
 
     print(f"\nDone. Annotated: {annotated}, Skipped: {skipped}")
     print(f"Annotations file: {ANNOTATIONS_FILE}")
