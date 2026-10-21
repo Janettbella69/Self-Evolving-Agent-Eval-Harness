@@ -265,6 +265,10 @@ def _build_options(
         mcp_servers={"eval-tools": tools_server},
         thinking=ThinkingConfigAdaptive(type="adaptive"),
         hooks=_get_eval_hooks(scores),
+        # Claude Code 2.1.304+ turns tool search on behind an ANTHROPIC_BASE_URL gateway,
+        # which hides score_grader behind ToolSearch and costs the judge an extra turn
+        # to find the one tool it must call. Load the eval tools upfront, as before.
+        env={"ENABLE_TOOL_SEARCH": "false"},
     )
 
 

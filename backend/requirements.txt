@@ -3,8 +3,9 @@ uvicorn[standard]>=0.34.0
 httpx>=0.28.0
 anthropic>=0.92.0
 # L2 judge runs through the Claude Agent SDK; 0.2.x wheels bundle the Claude Code CLI,
-# so no separate `claude` install is needed.
-claude-agent-sdk>=0.2.126
+# so no separate `claude` install is needed. 0.2.170 bundles CLI 2.1.306, which knows
+# Claude Haiku 5.5 (the default judge model).
+claude-agent-sdk>=0.2.170
 pydantic>=2.10.0
 python-dotenv>=1.1.0
 aiosqlite>=0.21.0
