@@ -39,7 +39,11 @@ ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "")
 GRADING_MODEL = os.getenv("GRADING_MODEL", "anthropic/claude-haiku-5.5")
 
 # Fallback judge model when GRADING_MODEL fails (Agent SDK fallback_model).
-GRADING_FALLBACK_MODEL = os.getenv("GRADING_FALLBACK_MODEL", "minimax/minimax-m2.7-highspeed")
+# openai/gpt-6-luna: same price as Claude Haiku 5.5 on OpenRouter, from another provider,
+# so an outage on one side doesn't take both down. The previous default,
+# minimax/minimax-m2.7-highspeed, is not listed on OpenRouter. Like the primary, this is an
+# OpenRouter id; with a plain Anthropic key set a Claude model such as claude-sonnet-5-5.
+GRADING_FALLBACK_MODEL = os.getenv("GRADING_FALLBACK_MODEL", "openai/gpt-6-luna")
 
 # Model that answers the product agent's clarification questions on the user's behalf
 # (runner/executor.py). Only has to pick an option, so a cheap model is fine.
@@ -75,6 +79,13 @@ JUDGE_PRESET = os.getenv("JUDGE_PRESET", "false").lower() in ("1", "true", "yes"
 # Judge max turns — preset mode needs more turns for verification workflows
 JUDGE_MAX_TURNS_PRESET = int(os.getenv("JUDGE_MAX_TURNS_PRESET", "20"))
 JUDGE_MAX_TURNS_BASIC = int(os.getenv("JUDGE_MAX_TURNS_BASIC", "10"))
+
+# Judge effort, set explicitly so it doesn't depend on Claude Code recognizing
+# GRADING_MODEL: an OpenRouter id such as anthropic/claude-haiku-5.5 isn't recognized
+# and gets "high". "medium" is Claude Haiku 5.5's own default.
+JUDGE_EFFORT = os.getenv("JUDGE_EFFORT", "medium").strip().lower()
+if JUDGE_EFFORT not in ("low", "medium", "high", "xhigh", "max"):
+    raise ValueError(f"JUDGE_EFFORT must be low, medium, high, xhigh or max, got {JUDGE_EFFORT!r}")
 
 # LangFuse — production trace import
 LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")

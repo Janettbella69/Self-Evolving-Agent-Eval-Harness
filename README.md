@@ -171,10 +171,11 @@ python scripts/export_langfuse.py --days 30 --limit 200 --tag my-agent --grade
 | `GRADING_MODEL` | judge 模型（先强后省，以和人工标注对得上为准）。2026-10-21 起默认 Claude Haiku 5.5：judge 跑在 Claude Agent SDK 上，Claude 模型不用网关转换；每百万 token 输入 $0.10、输出 $0.50（单次输入超过 10 万 token 时 $0.50 / $2.50），旧默认 `openai/gpt-5.4` 是 $2.50 / $15；还没在我们自己的人工标注上验证过。用纯 Anthropic key 时填 `claude-haiku-5-5` | `anthropic/claude-haiku-5.5`（OpenRouter 写法） |
 | `ANTHROPIC_BASE_URL` | Anthropic 兼容网关（如 OpenRouter）。默认 judge 模型名是 OpenRouter 写法；用纯 Anthropic key、不经网关时把 `GRADING_MODEL` 改成 `claude-haiku-5-5` | 空 |
 | `ANTHROPIC_AUTH_TOKEN` | 网关要求时替代 `ANTHROPIC_API_KEY` | 空 |
-| `GRADING_FALLBACK_MODEL` | judge 主模型失败时的备用模型 | `minimax/minimax-m2.7-highspeed` |
+| `GRADING_FALLBACK_MODEL` | judge 主模型过载或失败时的备用模型。GPT-6 Luna 和 Haiku 5.5 同价，换一家厂商，一边出问题另一边能顶上；旧默认 `minimax/minimax-m2.7-highspeed` 在 OpenRouter 上已经没有。不经网关时改成 Claude 模型（如 `claude-sonnet-5-5`） | `openai/gpt-6-luna`（OpenRouter 写法） |
 | `USER_SIMULATOR_MODEL` | 替用户回答被测 Agent 追问的模型 | `minimax/minimax-m2.7` |
 | `JUDGE_ENABLED` | 是否启用 L2 judge | 关 |
-| `JUDGE_PRESET` | judge 是否使用 Claude Code 全工具预设（更慢，可联网核实） | 关 |
+| `JUDGE_PRESET` | judge 是否用 Claude Code 预设：打开时只加载 WebSearch / WebFetch / Bash / Read / Grep / Glob 这 6 个内置工具（更慢，可联网核实）；关闭时（默认）不加载任何内置工具，只有评测工具 | 关 |
+| `JUDGE_EFFORT` | judge 的思考力度（`low` / `medium` / `high` / `xhigh` / `max`）。显式设定，因为 OpenRouter 写法的模型名 Claude Code 认不出来，会默认按 `high` 发；`medium` 是 Haiku 5.5 自己的默认值 | `medium` |
 | `LEGACY_L2_ENABLED` | 是否额外跑旧版 L2（relevance、completeness 等 5 个通用维度，每条 trace 多一次评委调用） | 关 |
 | `PASS_RULE` | 通过规则：`pass_all` 全部检查都过；`composite` 加权分 ≥ `PASS_THRESHOLD` | `pass_all` |
 | `PASS_THRESHOLD` | 加权分通过线，只在 `PASS_RULE=composite` 时生效（应由校准得出，勿拍脑袋） | `60` |
@@ -253,7 +254,7 @@ ANNOTATION_GUIDE.md  # 标注指南（AZORA 案例实例，可作为你的领域
 
 - 平台与被测系统只通过 HTTP 解耦，但**第一案例是购物研究场景**：采集协议、gate 和漏斗判据、L1 指标、可信域名表、四个 L2 judge prompt 都带该领域印记，接入新领域按上文四处替换。
 - 随仓库的示例数据集没有 `golden_data`，依赖它的 grader（rubric_compliance / product_matching / trap_detection / rubric_coverage）在示例数据上不会触发。要体验完整打分，用 `cli.py import-shoppingcomp` 导入 ShoppingComp 格式数据（需自备）。
-- L2 judge 通过 Claude Agent SDK 以 `bypassPermissions` 运行；`JUDGE_PRESET=true` 时 judge 拿到 Bash / WebFetch 等工具，只在隔离环境开启。
+- L2 judge 通过 Claude Agent SDK 以 `bypassPermissions` 运行。默认不加载任何 Claude Code 内置工具（`tools=[]`），只有评测用的 MCP 工具；`JUDGE_PRESET=true` 时加载 Bash / WebFetch 等 6 个内置工具，只在隔离环境开启。`allowed_tools` 只管免确认，管不住 `bypassPermissions`，限制工具要靠 `tools`（2026-10-21 之前没设，评委其实能看到并调用全部内置工具）。
 - 校准数值（阈值、TPR/TNR）以你自己数据上 `validate_evaluator.py` 的输出为准，不要沿用案例中的数字。
 - 生产 trace 导入目前只对接 LangFuse 2.x（`scripts/export_langfuse.py`）。
 

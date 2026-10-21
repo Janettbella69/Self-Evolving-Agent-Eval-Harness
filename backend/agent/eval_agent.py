@@ -1,10 +1,11 @@
 """Eval agent — Claude Agent SDK powered evaluation.
 
 Supports two execution modes (controlled by JUDGE_PRESET config):
-1. Preset mode (default): Uses preset="claude_code" for full Claude Code capabilities
-   — WebSearch, WebFetch, Bash, Read, Grep, Glob + eval tools
+1. Preset mode (JUDGE_PRESET=true): Uses preset="claude_code"; the only built-in tools
+   loaded are WebSearch, WebFetch, Bash, Read, Grep, Glob, plus the eval tools
    — Deep verification: spot-checks prices, cross-references sources, analyzes codebase
-2. Basic mode: Custom system prompt with only eval tools (score_grader + verify_url)
+2. Basic mode (default): Custom system prompt, no built-in tools, only the eval tools
+   (score_grader / score_dimension + verify_url)
    — Lightweight, faster, cheaper
 
 Both modes support:
@@ -119,6 +120,7 @@ def _get_eval_hooks(scores: dict) -> dict:
 from config import (
     GRADING_MODEL,
     GRADING_FALLBACK_MODEL,
+    JUDGE_EFFORT,
     JUDGE_PRESET,
     JUDGE_MAX_TURNS_PRESET,
     JUDGE_MAX_TURNS_BASIC,
@@ -207,8 +209,8 @@ _BASIC_TOOLS_GRADER = [
     "mcp__eval-tools__verify_url",
 ]
 
-# Claude Code preset tools — the preset provides Read/Bash/Grep/Glob/WebSearch/WebFetch
-# automatically; we just need to also allow our MCP eval tools.
+# Claude Code built-in tools for preset mode — the only built-ins loaded there.
+# Basic mode loads none.
 _PRESET_EXTRA_TOOLS = [
     "WebSearch",
     "WebFetch",
@@ -229,13 +231,13 @@ def _build_options(
 
     In preset mode:
       - system_prompt = {"type": "preset", "preset": "claude_code", "append": prompt_text + capabilities}
-      - allowed_tools = eval MCP tools + Claude Code built-in tools
+      - tools = the six built-ins in _PRESET_EXTRA_TOOLS; allowed_tools = those + eval MCP tools
       - max_turns = JUDGE_MAX_TURNS_PRESET (default 20)
 
     In basic mode:
       - system_prompt = prompt_text (plain string)
-      - allowed_tools = only eval MCP tools
-      - max_turns = JUDGE_MAX_TURNS_BASIC (default 6)
+      - tools = [] (no built-ins); allowed_tools = only eval MCP tools
+      - max_turns = JUDGE_MAX_TURNS_BASIC (default 10)
     """
     base_tools = _BASIC_TOOLS_L2 if is_l2 else _BASIC_TOOLS_GRADER
 
@@ -245,10 +247,12 @@ def _build_options(
             "preset": "claude_code",
             "append": prompt_text + "\n" + judge_capabilities(),
         }
+        builtin_tools = list(_PRESET_EXTRA_TOOLS)
         allowed_tools = base_tools + _PRESET_EXTRA_TOOLS
         max_turns = JUDGE_MAX_TURNS_PRESET if is_l2 else min(JUDGE_MAX_TURNS_PRESET, 15)
     else:
         system_prompt = prompt_text
+        builtin_tools = []
         allowed_tools = base_tools
         max_turns = 10 if is_l2 else JUDGE_MAX_TURNS_BASIC
 
@@ -261,9 +265,14 @@ def _build_options(
         fallback_model=fallback,
         max_turns=max_turns,
         permission_mode="bypassPermissions",
+        # allowed_tools only pre-approves tools; it doesn't limit bypassPermissions or what
+        # the model sees. Without `tools`, every Claude Code built-in (Bash, Write, Agent, ...)
+        # was loaded and callable: ~17K tokens of definitions on every request.
+        tools=builtin_tools,
         allowed_tools=allowed_tools,
         mcp_servers={"eval-tools": tools_server},
         thinking=ThinkingConfigAdaptive(type="adaptive"),
+        effort=JUDGE_EFFORT,
         hooks=_get_eval_hooks(scores),
         # Claude Code 2.1.304+ turns tool search on behind an ANTHROPIC_BASE_URL gateway,
         # which hides score_grader behind ToolSearch and costs the judge an extra turn
